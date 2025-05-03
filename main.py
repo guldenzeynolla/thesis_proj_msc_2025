@@ -12,15 +12,16 @@ from sklearn.ensemble import IsolationForest
 from openai import OpenAI
 import time
 
-import statsmodels.api as sm
-print("statsmodels version:", sm.__version__)
-
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras import Input, Model
 from tensorflow.keras.layers import LSTM, RepeatVector, TimeDistributed, Dense
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+import torch
 
 import statsmodels.api as sm
 from statsmodels.nonparametric.smoothers_lowess import lowess
+
+from itertools import combinations
 
 # Log File
 log_file_path = "strisciate_vc/log_veronaCard.csv"
@@ -310,6 +311,7 @@ plt.tight_layout()
 plt.show()
 
 
+
 # Barplot средних визитов по бинам температуры
 df_weather_vis['temp_bin'] = pd.cut(df_weather_vis['temp'], 
                                     bins=range(0, 36, 5), right=False)
@@ -535,148 +537,361 @@ diffs = daily_visits[daily_visits['anomaly_lstm_old'] != daily_visits['anomaly_l
 print(f"\nDates with differing flags ({len(diffs)}):")
 print(diffs[['anomaly_lstm_old','anomaly_lstm_new']])
 
+# Merge daily weather data with anomaly flags
+df_weather_vis = df_weather_vis.join(
+    daily_visits[['anomaly_if', 'anomaly_lstm_old', 'anomaly_lstm_new']]
+)
+
+# Temperature vs IF anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_if', y='temp', data=df_weather_vis)
+plt.title('Temperature: Normal vs IF-Anomalous Days')
+plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
+plt.ylabel('Temperature (°C)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Temperature vs LSTM anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_lstm_new', y='temp', data=df_weather_vis)
+plt.title('Temperature: Normal vs LSTM-Anomalous Days')
+plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
+plt.ylabel('Temperature (°C)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Rainfall vs IF anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_if', y='rain', data=df_weather_vis)
+plt.title('Rainfall: Normal vs IF-Anomalous Days')
+plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
+plt.ylabel('Rainfall (mm)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Rainfall vs LSTM anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_lstm_new', y='rain', data=df_weather_vis)
+plt.title('Rainfall: Normal vs LSTM-Anomalous Days')
+plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
+plt.ylabel('Rainfall (mm)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Mean weather values in normal vs anomalous days
+print("Average weather conditions on normal vs IF-anomalous days:")
+print(df_weather_vis.groupby('anomaly_if')[['temp', 'rain']].mean())
+
+print("\nAverage weather conditions on normal vs LSTM-anomalous days:")
+print(df_weather_vis.groupby('anomaly_lstm_new')[['temp', 'rain']].mean())
 
 
-# #add AI
-# API_KEY = os.getenv("REMOVED_OPENAI_KEY")
-# MODEL_NAME = "gpt-4"           # или "gpt-4o", "gpt-3.5-turbo-16k" 
-# OUTPUT_FILE = "verona_contextual_events.csv"
+# Объединяем visits с погодой
+df_for_if = daily_visits.join(df_wth, how='inner')
+df_for_if = df_for_if.dropna(subset=['visits', 'temp', 'rain'])
 
-# client = OpenAI(api_key=API_KEY)
+# Модель Isolation Forest на 3 признаках
+features = ['visits', 'temp', 'rain']
+model_if_weather = IsolationForest(contamination=0.02, random_state=42)
+df_for_if['anomaly_if_weather'] = model_if_weather.fit_predict(df_for_if[features])
 
-# anomaly_dates = anomalies.index.strftime('%Y-%m-%d').tolist()
+# Обновляем основной датафрейм
+daily_visits['anomaly_if_weather'] = df_for_if['anomaly_if_weather']
 
-# if os.path.exists(OUTPUT_FILE):
-#     print(f"\n Events file found: {OUTPUT_FILE}")
-#     events_df = pd.read_csv(OUTPUT_FILE)
-#     existing_dates = events_df['date'].tolist()
-# else:
-#     print(f"\n No events file found. Creating new...")
-#     events_df = pd.DataFrame(columns=['date', 'event_summary'])
-#     existing_dates = []
+#LSTM with weather
 
-# new_dates = [date for date in anomaly_dates if date not in existing_dates]
-# print(f"\n Found {len(new_dates)} new anomaly dates")
+# Признаки: visits, high/low volume, temp, rain
+df_lstm = daily_visits.join(df_wth, how='inner').copy()
+df_lstm = df_lstm.dropna(subset=['visits', 'temp', 'rain'])
 
-# events_list = []
+df_lstm['high_volume'] = (df_lstm['visits'] > df_lstm['visits'].quantile(0.95)).astype(int)
+df_lstm['low_volume']  = (df_lstm['visits'] < df_lstm['visits'].quantile(0.05)).astype(int)
 
-# def get_event_summary(date):
-#     prompt = (f"What important events, festivals, incidents, or special conditions occurred "
-#               f"in Verona, Italy around the date {date}? Provide a short, clear summary.")
-#     chat_completion = client.chat.completions.create(
-#         model=MODEL_NAME,
-#         messages=[{"role": "user", "content": prompt}],
-#         temperature=0.0,
-#         max_tokens=300
-#     )
-#     return chat_completion.choices[0].message.content.strip()
+features = ['visits', 'high_volume', 'low_volume', 'temp', 'rain']
+X_vals = df_lstm[features].values
+X_scaled = MinMaxScaler().fit_transform(X_vals)
 
-# for date in new_dates:
-#     print(f"Processing date: {date}")
-#     try:
-#         summary = get_event_summary(date)
-#         print(f"Event: {summary}\n")
-#         events_list.append({'date': date, 'event_summary': summary})
-#         time.sleep(1.5)
-#     except Exception as e:
-#         print(f"Error on {date}: {e}")
+# sliding window
+n_steps = 14
+X_seq = np.array([X_scaled[i:i+n_steps] for i in range(len(X_scaled)-n_steps+1)])
+n_features = X_seq.shape[2]
 
-# if events_list:
-#     new_events_df = pd.DataFrame(events_list)
-#     events_df = pd.concat([events_df, new_events_df], ignore_index=True)
-#     events_df.to_csv(OUTPUT_FILE, index=False)
-#     print(f"\n Events file updated: '{OUTPUT_FILE}'")
-# else:
-#     print("\n No new events")
+# Model
+inputs = Input(shape=(n_steps, n_features))
+encoded = LSTM(64, activation='relu')(inputs)
+decoded = RepeatVector(n_steps)(encoded)
+decoded = LSTM(64, activation='relu', return_sequences=True)(decoded)
+outputs = TimeDistributed(Dense(n_features))(decoded)
 
-# print(events_df.head())
+ae_weather = Model(inputs, outputs)
+ae_weather.compile(optimizer='adam', loss='mse')
 
-# # Добавим колонку "context_event" в DataFrame с аномалиями.
-# #Если событие есть в verona_contextual_events.csv, оно подтянется.
-# #Если нет → будет "No event found".
-# events_df = pd.read_csv('verona_contextual_events.csv')
-# anomalies_with_context = anomalies.copy()
-# anomalies_with_context['date'] = anomalies_with_context.index.strftime('%Y-%m-%d')
-# anomalies_with_context = anomalies_with_context.merge(events_df, how='left', on='date')
+ae_weather.fit(X_seq, X_seq, epochs=20, batch_size=32, validation_split=0.1, shuffle=True)
 
-# print(anomalies_with_context[['visits', 'event_summary']].head())
+# Predictions
+X_pred_weather = ae_weather.predict(X_seq)
+mse_weather = np.mean((X_pred_weather - X_seq)**2, axis=(1,2))
+threshold_weather = np.quantile(mse_weather, 0.98)
 
-# #Анализ и интерпретация результатов. Посчитать процент аномалий, совпавших с событиями
-# total_anomalies = len(anomalies_with_context)
-# matched_events = anomalies_with_context['event_summary'].notnull().sum()
-# print(f"Events found for {matched_events} out of {total_anomalies} anomalies ({matched_events/total_anomalies:.2%})")
-# plt.figure(figsize=(12,6))
-# sns.countplot(y=anomalies_with_context['event_summary'].notnull(), palette='Set2')
-# plt.title('Anomalies with/without Contextual Event')
-# plt.xlabel('Count')
-# plt.ylabel('Has Event')
-# plt.grid(alpha=0.3)
-# plt.show()
+# Аномалии
+dates_lstm = df_lstm.index[n_steps - 1:]
+df_lstm['anomaly_lstm_weather'] = 0
+df_lstm.loc[dates_lstm[mse_weather > threshold_weather], 'anomaly_lstm_weather'] = 1
+
+# Объединяем обратно
+daily_visits['anomaly_lstm_weather'] = df_lstm['anomaly_lstm_weather']
 
 
+def compare_flags(df, columns, label):
+    print(f"\n🔍 Comparison: {label}")
+    for a, b in combinations(columns, 2):
+        a_flags = df[a].replace({-1:1})  # IF uses -1 for anomaly
+        b_flags = df[b].replace({-1:1})
+        both = ((a_flags == 1) & (b_flags == 1)).sum()
+        union = ((a_flags == 1) | (b_flags == 1)).sum()
+        jaccard = both / union if union else 0
+        print(f"{a} vs {b}:")
+        print(f"  {a} anomalies: {a_flags.sum()}")
+        print(f"  {b} anomalies: {b_flags.sum()}")
+        print(f"  Both: {both}, Union: {union}, Jaccard: {jaccard:.2f}\n")
 
-# # LSTM-периоды 
-# # Группировка LSTM-аномалий в периоды
-# df = daily_visits.copy()
-# df['flag'] = df['anomaly_lstm']
-# df['grp'] = (df['flag'] != df['flag'].shift()).cumsum()
+# --- Сравнение IF версий ---
+compare_flags(
+    daily_visits,
+    ['anomaly_if', 'anomaly_if2', 'anomaly_if_weather'],
+    label='Isolation Forest Versions'
+)
 
-# periods_lstm = (
-#     df[df['flag']==1]
-#       .groupby('grp')
-#       .agg(
-#           start_date=('flag','idxmin'),
-#           end_date  =('flag','idxmax')
-#       )
-#       .reset_index(drop=True)
-# )
+# --- Сравнение LSTM версий ---
+compare_flags(
+    daily_visits,
+    ['anomaly_lstm_old', 'anomaly_lstm_new', 'anomaly_lstm_weather'],
+    label='LSTM Versions'
+)
 
-# print("LSTM intervals:\n", periods_lstm)
+#Пример для IF:
+plt.figure(figsize=(12,4))
+plt.plot(daily_visits.index, (daily_visits['anomaly_if']==-1).astype(int), drawstyle='steps-mid', label='IF (visits)', alpha=0.5)
+plt.plot(daily_visits.index, (daily_visits['anomaly_if2']==-1).astype(int), drawstyle='steps-mid', label='IF (visits + vol)', alpha=0.7)
+plt.plot(daily_visits.index, (daily_visits['anomaly_if_weather']==-1).astype(int), drawstyle='steps-mid', label='IF (with weather)', alpha=0.9)
+plt.ylim(-0.1,1.1)
+plt.title('Comparison of Isolation Forest Anomaly Flags')
+plt.legend()
+plt.tight_layout()
+plt.show()
 
-# # Новая функция для AI-запросов
-# def get_event_summary_lstm(start, end):
-#     prompt = (
-#         f"You are a factual assistant. Using only verified sources (e.g. Wikipedia), "
-#         f"list major public events, festivals or incidents that actually took place in Verona, Italy "
-#         f"between {start} and {end}. "
-#         "If there are no records, answer “No known events in this period.”"
-#     )
+#LSTM
+plt.figure(figsize=(12,4))
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid', label='LSTM (visits)', alpha=0.5)
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid', label='LSTM (+vol)', alpha=0.7)
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_weather'], drawstyle='steps-mid', label='LSTM (with weather)', alpha=0.9)
+plt.ylim(-0.1,1.1)
+plt.title('Comparison of LSTM Anomaly Flags')
+plt.legend()
+plt.tight_layout()
+plt.show()
 
-#     resp = client.chat.completions.create(
-#         model=MODEL_NAME,
-#         messages=[{"role":"user","content":prompt}],
-#         temperature=0.0,
-#         max_tokens=200
-#     )
-#     return resp.choices[0].message.content.strip()
 
-# # Сбор объяснений по каждому интервалу
-# OUTPUT_LSTM = "verona_lstm_contextual_events.csv"
-# if os.path.exists(OUTPUT_LSTM):
-#     events_lstm_df = pd.read_csv(OUTPUT_LSTM)
-#     existing_intervals = set(
-#         zip(events_lstm_df['start_date'], events_lstm_df['end_date'])
-#     )
-# else:
-#     events_lstm_df = pd.DataFrame(columns=['start_date','end_date','explanation'])
-#     existing_intervals = set()
+# Приводим флаги к 0/1
+daily_visits['IF_visits'] = (daily_visits['anomaly_if'] == -1).astype(int)
+daily_visits['IF_vol'] = (daily_visits['anomaly_if2'] == -1).astype(int)
+daily_visits['IF_weather'] = (daily_visits['anomaly_if_weather'] == -1).astype(int)
 
-# new_rows = []
-# for _, row in periods_lstm.iterrows():
-#     sd = row['start_date'].date().isoformat()
-#     ed = row['end_date'].date().isoformat()
-#     if (sd, ed) in existing_intervals:
-#         continue
-#     print(f"Processing interval: {sd} → {ed}")
-#     summary = get_event_summary_lstm(sd, ed)
-#     new_rows.append({'start_date': sd, 'end_date': ed, 'explanation': summary})
-#     time.sleep(1.5)
+daily_visits['LSTM_visits'] = daily_visits['anomaly_lstm_old']
+daily_visits['LSTM_vol'] = daily_visits['anomaly_lstm_new']
+daily_visits['LSTM_weather'] = daily_visits['anomaly_lstm_weather']
 
-# if new_rows:
-#     events_lstm_df = pd.concat([events_lstm_df, pd.DataFrame(new_rows)], ignore_index=True)
-#     events_lstm_df.to_csv(OUTPUT_LSTM, index=False)
-#     print(f"\nLSTM events file updated: '{OUTPUT_LSTM}'")
-# else:
-#     print("\nNo new LSTM intervals to process")
+def compare_three_versions(df, version_list, model_name):
+    rows = []
+    for a, b in combinations(version_list, 2):
+        A = df[a]
+        B = df[b]
+        both = ((A == 1) & (B == 1)).sum()
+        only_a = ((A == 1) & (B == 0)).sum()
+        only_b = ((A == 0) & (B == 1)).sum()
+        union = ((A == 1) | (B == 1)).sum()
+        jaccard = both / union if union else 0
+        overlap_a = both / A.sum() * 100 if A.sum() else 0
+        overlap_b = both / B.sum() * 100 if B.sum() else 0
+        disagreements = (A != B).sum()
+        rows.append({
+            'Model': model_name,
+            'Version A': a,
+            'Version B': b,
+            'Anomalies A': A.sum(),
+            'Anomalies B': B.sum(),
+            'Both Anomalies': both,
+            'Only in A': only_a,
+            'Only in B': only_b,
+            'Disagreements': disagreements,
+            'Jaccard Similarity': round(jaccard, 2),
+            'Overlap % A→B': round(overlap_a, 1),
+            'Overlap % B→A': round(overlap_b, 1),
+        })
+    return pd.DataFrame(rows)
 
-# print(events_lstm_df.head())
+# Сравнение IF
+if_versions = ['IF_visits', 'IF_vol', 'IF_weather']
+df_if_compare = compare_three_versions(daily_visits, if_versions, model_name='Isolation Forest')
+
+# Сравнение LSTM
+lstm_versions = ['LSTM_visits', 'LSTM_vol', 'LSTM_weather']
+df_lstm_compare = compare_three_versions(daily_visits, lstm_versions, model_name='LSTM')
+
+# Вывод
+print("\n=== Isolation Forest (3 versions) ===")
+print(df_if_compare)
+
+print("\n=== LSTM Autoencoder (3 versions) ===")
+print(df_lstm_compare)
+
+#add AI
+
+API_KEY = os.getenv("REMOVED_OPENAI_KEY")
+MODEL_NAME = "gpt-4"           # или "gpt-4o", "gpt-3.5-turbo-16k" 
+OUTPUT_FILE = "verona_contextual_events.csv"
+
+client = OpenAI(api_key=API_KEY)
+
+anomaly_dates = anomalies.index.strftime('%Y-%m-%d').tolist()
+
+if os.path.exists(OUTPUT_FILE):
+    print(f"\n Events file found: {OUTPUT_FILE}")
+    events_df = pd.read_csv(OUTPUT_FILE)
+    existing_dates = events_df['date'].tolist()
+else:
+    print(f"\n No events file found. Creating new...")
+    events_df = pd.DataFrame(columns=['date', 'event_summary'])
+    existing_dates = []
+
+new_dates = [date for date in anomaly_dates if date not in existing_dates]
+print(f"\n Found {len(new_dates)} new anomaly dates")
+
+events_list = []
+
+def get_event_summary(date):
+    prompt = (f"What important events, festivals, incidents, or special conditions occurred "
+              f"in Verona, Italy around the date {date}? Provide a short, clear summary.")
+    chat_completion = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=300
+    )
+    return chat_completion.choices[0].message.content.strip()
+
+for date in new_dates:
+    print(f"Processing date: {date}")
+    try:
+        summary = get_event_summary(date)
+        print(f"Event: {summary}\n")
+        events_list.append({'date': date, 'event_summary': summary})
+        time.sleep(1.5)
+    except Exception as e:
+        print(f"Error on {date}: {e}")
+
+if events_list:
+    new_events_df = pd.DataFrame(events_list)
+    events_df = pd.concat([events_df, new_events_df], ignore_index=True)
+    events_df.to_csv(OUTPUT_FILE, index=False)
+    print(f"\n Events file updated: '{OUTPUT_FILE}'")
+else:
+    print("\n No new events")
+
+print(events_df.head())
+
+# Добавим колонку "context_event" в DataFrame с аномалиями.
+#Если событие есть в verona_contextual_events.csv, оно подтянется.
+#Если нет → будет "No event found".
+events_df = pd.read_csv('verona_contextual_events.csv')
+anomalies_with_context = anomalies.copy()
+anomalies_with_context['date'] = anomalies_with_context.index.strftime('%Y-%m-%d')
+anomalies_with_context = anomalies_with_context.merge(events_df, how='left', on='date')
+
+print(anomalies_with_context[['visits', 'event_summary']].head())
+
+#Анализ и интерпретация результатов. Посчитать процент аномалий, совпавших с событиями
+total_anomalies = len(anomalies_with_context)
+matched_events = anomalies_with_context['event_summary'].notnull().sum()
+print(f"Events found for {matched_events} out of {total_anomalies} anomalies ({matched_events/total_anomalies:.2%})")
+plt.figure(figsize=(12,6))
+sns.countplot(y=anomalies_with_context['event_summary'].notnull(), palette='Set2')
+plt.title('Anomalies with/without Contextual Event')
+plt.xlabel('Count')
+plt.ylabel('Has Event')
+plt.grid(alpha=0.3)
+plt.show()
+
+
+
+# LSTM-периоды 
+# Группировка LSTM-аномалий в периоды
+df = daily_visits.copy()
+df['flag'] = df['anomaly_lstm']
+df['grp'] = (df['flag'] != df['flag'].shift()).cumsum()
+
+periods_lstm = (
+    df[df['flag']==1]
+      .groupby('grp')
+      .agg(
+          start_date=('flag','idxmin'),
+          end_date  =('flag','idxmax')
+      )
+      .reset_index(drop=True)
+)
+
+print("LSTM intervals:\n", periods_lstm)
+
+# Новая функция для AI-запросов
+def get_event_summary_lstm(start, end):
+    prompt = (
+        f"You are a factual assistant. Using only verified sources (e.g. Wikipedia), "
+        f"list major public events, festivals or incidents that actually took place in Verona, Italy "
+        f"between {start} and {end}. "
+        "If there are no records, answer “No known events in this period.”"
+    )
+
+    resp = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[{"role":"user","content":prompt}],
+        temperature=0.0,
+        max_tokens=200
+    )
+    return resp.choices[0].message.content.strip()
+
+# Сбор объяснений по каждому интервалу
+OUTPUT_LSTM = "verona_lstm_contextual_events.csv"
+if os.path.exists(OUTPUT_LSTM):
+    events_lstm_df = pd.read_csv(OUTPUT_LSTM)
+    existing_intervals = set(
+        zip(events_lstm_df['start_date'], events_lstm_df['end_date'])
+    )
+else:
+    events_lstm_df = pd.DataFrame(columns=['start_date','end_date','explanation'])
+    existing_intervals = set()
+
+new_rows = []
+for _, row in periods_lstm.iterrows():
+    sd = row['start_date'].date().isoformat()
+    ed = row['end_date'].date().isoformat()
+    if (sd, ed) in existing_intervals:
+        continue
+    print(f"Processing interval: {sd} → {ed}")
+    summary = get_event_summary_lstm(sd, ed)
+    new_rows.append({'start_date': sd, 'end_date': ed, 'explanation': summary})
+    time.sleep(1.5)
+
+if new_rows:
+    events_lstm_df = pd.concat([events_lstm_df, pd.DataFrame(new_rows)], ignore_index=True)
+    events_lstm_df.to_csv(OUTPUT_LSTM, index=False)
+    print(f"\nLSTM events file updated: '{OUTPUT_LSTM}'")
+else:
+    print("\nNo new LSTM intervals to process")
+
+print(events_lstm_df.head())
+
+
