@@ -1,156 +1,120 @@
+# %% main code
 import os
+import time
+
 import pandas as pd
 import numpy as np
-import matplotlib.pylab as plt
+import matplotlib.pyplot as plt
 import seaborn as sns
-
-from glob import glob
 import plotly.express as px
 
 from sklearn.ensemble import IsolationForest
-
-from openai import OpenAI
-import time
-
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras import Input, Model
 from tensorflow.keras.layers import LSTM, RepeatVector, TimeDistributed, Dense
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-import torch
-
 import statsmodels.api as sm
 from statsmodels.nonparametric.smoothers_lowess import lowess
-
 from itertools import combinations
+from sklearn.metrics import jaccard_score
+import calendar
+from sklearn.metrics import precision_score, recall_score, f1_score
+from scipy.stats import ttest_ind
 
-# Log File
-log_file_path = "strisciate_vc/log_veronaCard.csv"
-log_df = pd.read_csv(log_file_path, encoding='utf-8')
+from dotenv import load_dotenv
+from openai import OpenAI
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
-print("Log file head:")
-print(log_df.head(), "\n")
 
-print("Log file columns:")
-print(log_df.columns.tolist(), "\n")
 
-print("Log file info:")
-print(log_df.info(), "\n")
 
-print("Log file summary statistics:")
-print(log_df.describe(include='all'))
 
-# Inspect raw values before conversion
-print("\nRaw values in 'attivazione' before conversion:")
-print(log_df['attivazione'].head(20))
-print("\nRaw values in 'istante' before conversion:")
-print(log_df['istante'].head(20))
+def read_csv(path):
+    try:
+        df = pd.read_csv(path, encoding='utf-8')
+        print(f"Loaded {path}: {len(df)} rows")
+        return df
+    except FileNotFoundError:
+        print(f"File not found: {path}")
+    except Exception as e:
+        print(f"Error reading {path}: {e}")
+    return pd.DataFrame()
 
-# Convert datetime columns in log_df
-# For 'attivazione', the raw format is 'YYYY-MM-DD'
-if 'attivazione' in log_df.columns:
-    log_df['attivazione'] = pd.to_datetime(log_df['attivazione'], format='%Y-%m-%d', errors='coerce')
+#  Обработка логов 
+log_path = "strisciate_vc/log_veronaCard.csv"
+log_df = read_csv(log_path)
 
-if 'istante' in log_df.columns:
-    log_df['istante'] = log_df['istante'].str.strip() 
-    log_df['istante'] = pd.to_datetime(log_df['istante'], format='%d/%m/%Y %H:%M', errors='coerce')
+# Конвертируем даты
+if "attivazione" in log_df:
+    log_df["attivazione"] = pd.to_datetime(
+        log_df["attivazione"], format="%Y-%m-%d", errors="coerce"
+    )
+if "istante" in log_df:
+    log_df["istante"] = pd.to_datetime(
+        log_df["istante"].str.strip(), format="%d/%m/%Y %H:%M", errors="coerce"
+    )
 
-print("\nLog file after datetime conversion:")
-print(log_df.head(), "\n")
+print("\nLog DataFrame info after datetime conversion:")
 print(log_df.info())
 
-# Combine Yearly Files (2014-2020)
-years = list(range(2014, 2021))
-file_paths = [f'strisciate_vc/veronacard_opendata/veronacard_{year}_opendata.csv' for year in years]
-dfs_dict = {}
+# Убираем дубликаты
+before = len(log_df)
+log_df = log_df.drop_duplicates().reset_index(drop=True)
+print(f"Removed {before - len(log_df)} duplicate rows in log_df\n")
 
-print("\nReading yearly files and displaying first few rows:")
-for file_path in file_paths:
-    if not os.path.exists(file_path):
-        print(f"File not found: {file_path}")
-        continue
-    try:
-        df = pd.read_csv(file_path, encoding='utf-8')
-        dfs_dict[file_path] = df
-        print(f"{file_path}:")
-        print(df.head(), "\n")
-    except Exception as e:
-        print(f"Error reading file {file_path}: {e}")
+# --- Обработка годовых файлов ---
+years = range(2014, 2021)
+folder = "strisciate_vc/veronacard_opendata"
+list_dfs = []
 
-print("Checking column structure for each file:")
-columns_dict = {}
-for file_path, df in dfs_dict.items():
-    columns_dict[file_path] = list(df.columns)
-    print(f"{file_path}:")
-    print(f"  Number of columns: {len(df.columns)}")
-    print(f"  Columns: {list(df.columns)}\n")
-all_columns = list(columns_dict.values())
-same_structure = all(cols == all_columns[0] for cols in all_columns)
-print("All files have the same column structure:", same_structure)
+for year in years:
+    path = os.path.join(folder, f"veronacard_{year}_opendata.csv")
+    df = read_csv(path)
+    if not df.empty:
+        list_dfs.append(df)
 
-if same_structure:
-    combined_df = pd.concat(list(dfs_dict.values()), ignore_index=True)
-    print("\nCombined DataFrame shape:", combined_df.shape)
-    print("\nInfo about the combined DataFrame:")
-    print(combined_df.info())
+# Проверяем, что есть файлы для объединения
+if not list_dfs:
+    raise RuntimeError("No yearly files loaded. Проверьте пути и наличие файлов.")
 
-    # Convert datetime columns in combined_df
-    # Combine 'data_visita' and 'ora_visita' into 'visit_datetime'
-    if 'data_visita' in combined_df.columns and 'ora_visita' in combined_df.columns:
-        combined_df['visit_datetime'] = pd.to_datetime(
-            combined_df['data_visita'].astype(str) + ' ' + combined_df['ora_visita'].astype(str),
-            format='%d/%m/%Y %H:%M', errors='coerce'
-        )
-    # Convert 'data_attivazione' into 'activation_datetime'
-    if 'data_attivazione' in combined_df.columns:
-        combined_df['activation_datetime'] = pd.to_datetime(
-            combined_df['data_attivazione'], format='%d/%m/%Y', errors='coerce'
-        )
-    
-    print("\nCombined DataFrame after datetime conversion:")
-    print(combined_df.head(), "\n")
-    print(combined_df.info())
-else:
-    print("File structures differ; further analysis is required before combining the files.")
+# Проверяем одинаковость структуры
+cols0 = set(list_dfs[0].columns)
+if not all(set(df.columns) == cols0 for df in list_dfs):
+    raise RuntimeError("Column structures differ between yearly files.")
 
-# Data Cleaning
-# Combined Yearly DataFrame 
-print("Combined DataFrame Missing Values:")
-print(combined_df.isnull().sum())
+# Объединяем
+combined_df = pd.concat(list_dfs, ignore_index=True)
+print(f"\nCombined DataFrame shape: {combined_df.shape}")
 
-if 'visit_datetime' in combined_df.columns:
-    missing_visit_dt = combined_df['visit_datetime'].isnull().sum()
-    print(f"Missing visit_datetime values: {missing_visit_dt}")
+# Конвертируем даты посещений и активаций
+if "data_visita" in combined_df and "ora_visita" in combined_df:
+    combined_df["visit_datetime"] = pd.to_datetime(
+        combined_df["data_visita"].astype(str).str.strip()
+        + " "
+        + combined_df["ora_visita"].astype(str).str.strip(),
+        format="%d/%m/%Y %H:%M",
+        errors="coerce",
+    )
+if "data_attivazione" in combined_df:
+    combined_df["activation_datetime"] = pd.to_datetime(
+        combined_df["data_attivazione"], format="%d/%m/%Y", errors="coerce"
+    )
 
-if 'activation_datetime' in combined_df.columns:
-    missing_activation_dt = combined_df['activation_datetime'].isnull().sum()
-    print(f"Missing activation_datetime values: {missing_activation_dt}")
+print("\nCombined DataFrame info after datetime conversion:")
+print(combined_df.info())
 
-# Check duplicates in combined_df
-duplicates_combined = combined_df.duplicated().sum()
-print(f"Number of duplicate rows in combined_df: {duplicates_combined}")
-combined_df_clean = combined_df.drop_duplicates()
-print(f"Combined DataFrame shape after dropping duplicates: {combined_df_clean.shape}")
+# Убираем дубликаты
+before = len(combined_df)
+combined_df_clean = combined_df.drop_duplicates().reset_index(drop=True)
+print(f"Removed {before - len(combined_df_clean)} duplicate rows in combined_df\n")
 
-# Log DataFrame 
-print("\nLog DataFrame Missing Values:")
-print(log_df.isnull().sum())
+# Итоговая проверка пропусков
+print("Missing values in log_df:")
+print(log_df.isnull().sum()[lambda x: x > 0], "\n")
 
-if 'attivazione' in log_df.columns:
-    missing_attivazione = log_df['attivazione'].isnull().sum()
-    print(f"Missing attivazione values: {missing_attivazione}")
+print("Missing values in combined_df_clean:")
+print(combined_df_clean.isnull().sum()[lambda x: x > 0])
 
-if 'istante' in log_df.columns:
-    missing_istante = log_df['istante'].isnull().sum()
-    print(f"Missing istante values: {missing_istante}")
-
-# Check duplicates in log_df
-duplicates_log = log_df.duplicated().sum()
-print(f"Number of duplicate rows in log_df: {duplicates_log}")
-log_df_clean = log_df.drop_duplicates()
-print(f"Log DataFrame shape after dropping duplicates: {log_df_clean.shape}")
-
-
-#EDA tiiiime
+# %% EDA tiiiime
 
 # Агрегируем количество посещений по месяцам и график с усреднением (скользящее среднее за 3 месяца)
 combined_df_clean.set_index('visit_datetime', inplace=True)
@@ -245,7 +209,7 @@ fig.show()
 
 #lets add weather
 daily_visits = combined_df_clean.resample('D').size().to_frame('visits')
-df_wth = pd.read_csv('UTF-8weather.csv', encoding='utf-8', parse_dates=['data'])
+df_wth = pd.read_csv('strisciate_vc/weather_db.csv', encoding='utf-8', parse_dates=['data'])
 df_wth = df_wth.set_index('data')[['temp','rain']]
 
 # объединение по дате (inner, чтобы отобрать совпадающие дни)
@@ -291,7 +255,6 @@ plt.ylabel('Number of Visits')
 plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
-plt.savefig("loess_temp_visits_manual.pdf")
 plt.show()
 
 
@@ -341,370 +304,58 @@ plt.grid(alpha=0.3, axis='y')
 plt.show()
 
 
-#ANOMALY DETECTIOOOOOON START!!!!
-
-
-high_thr = daily_visits['visits'].quantile(0.95)
-low_thr  = daily_visits['visits'].quantile(0.05)
-daily_visits['high_volume'] = (daily_visits['visits'] >  high_thr).astype(int)
-daily_visits['low_volume']  = (daily_visits['visits'] <  low_thr ).astype(int)
-
-model_if = IsolationForest(contamination=0.02, random_state=42)
-daily_visits['anomaly_if'] = model_if.fit_predict(daily_visits[['visits']])
-
-# with high/low
-model_if2 = IsolationForest(contamination=0.02, random_state=42)
-X2 = daily_visits[['visits','high_volume','low_volume']]
-daily_visits['anomaly_if2'] = model_if2.fit_predict(X2)
-
-# to see difference
-plt.figure(figsize=(15,6))
-plt.plot(daily_visits.index, daily_visits['visits'],
-         color='gray', alpha=0.5, label='Visits')
-
-# original IF
-mask1 = daily_visits['anomaly_if'] == -1
-plt.scatter(daily_visits.index[mask1],
-            daily_visits['visits'][mask1],
-            color='red', marker='x', s=50, label='IF (original)')
-
-# IF with high/low
-mask2 = daily_visits['anomaly_if2'] == -1
-plt.scatter(daily_visits.index[mask2],
-            daily_visits['visits'][mask2],
-            color='blue', marker='o', s=50, label='IF (with high/low)')
-
-plt.title("Isolation Forest: original vs с with high_volume/low_volume")
-plt.xlabel("Date")
-plt.ylabel("Number of Visits")
-plt.legend()
-plt.grid(alpha=0.3)
-plt.show()
-
-
-# ОРИГИНАЛЬНЫЙ LSTM-БЛОК (двухступенчатый автоэнкодер на visits) 
-n_steps = 14     # длина окна в днях
-n_features = 1   # у нас один признак — visits
-
-# Подготовка скользящих окон 
-values = daily_visits['visits'].values.reshape(-1, 1)
-scaler = MinMaxScaler()
-values_scaled = scaler.fit_transform(values)
-
-windows = []
-for i in range(len(values_scaled) - n_steps + 1):
-    windows.append(values_scaled[i : i + n_steps])
-windows = np.array(windows)  # (num_windows, n_steps, 1)
-X = windows.reshape((windows.shape[0], n_steps, n_features))
-
-# Автоэнкодер (оригинальный)
-inputs = Input(shape=(n_steps, n_features))
-encoded = LSTM(64, activation='relu')(inputs)
-decoded = RepeatVector(n_steps)(encoded)
-decoded = LSTM(64, activation='relu', return_sequences=True)(decoded)
-outputs = TimeDistributed(Dense(n_features))(decoded)
-autoencoder = Model(inputs, outputs)
-autoencoder.compile(optimizer='adam', loss='mse')
-
-history = autoencoder.fit(
-    X, X,
-    epochs=20,
-    batch_size=32,
-    validation_split=0.1,
-    shuffle=True
-)
-
-X_pred = autoencoder.predict(X)
-mse = np.mean((X_pred - X)**2, axis=(1,2))
-threshold = np.quantile(mse, 0.98)       # 2% самых больших ошибок
-lstm_flags = (mse > threshold).astype(int)
-
-lstm_dates = daily_visits.index[n_steps - 1:].to_list()
-lstm_df = pd.DataFrame({
-    'date': lstm_dates,
-    'anomaly_lstm_old': lstm_flags
-}).set_index('date')
-
-daily_visits = daily_visits.join(lstm_df)
-daily_visits['anomaly_lstm_old'] = daily_visits['anomaly_lstm_old'].fillna(0).astype(int)
-
-plt.figure(figsize=(15,5))
-plt.plot(daily_visits.index, daily_visits['visits'], label='Visits', alpha=0.5)
-plt.scatter(
-    daily_visits.index[daily_visits['anomaly_lstm_old']==1],
-    daily_visits['visits'][daily_visits['anomaly_lstm_old']==1],
-    c='green', label='LSTM Anomaly (old)', s=50
-)
-plt.title("LSTM-AE (original): anomalies")
-plt.legend()
-plt.show()
-
-
-# НОВЫЙ MF-LSTM-БЛОК (3-feature автоэнкодер) 
-daily_visits['high_volume'] = (
-    daily_visits['visits'] > daily_visits['visits'].quantile(0.95)
-).astype(int)
-daily_visits['low_volume'] = (
-    daily_visits['visits'] < daily_visits['visits'].quantile(0.05)
-).astype(int)
-
-# Формируем windows из трёх фич
-fv = daily_visits[['visits','high_volume','low_volume']].values
-fv_scaled = MinMaxScaler().fit_transform(fv)
-n_steps = 14
-X_mf = np.array([fv_scaled[i:i+n_steps] for i in range(len(fv_scaled)-n_steps+1)])
-n_features = X_mf.shape[2]
-
-# Строим и обучаем MF-LSTM-AE
-inputs = Input(shape=(n_steps, n_features))
-encoded = LSTM(64, activation='relu')(inputs)
-decoded = RepeatVector(n_steps)(encoded)
-decoded = LSTM(64, activation='relu', return_sequences=True)(decoded)
-outputs = TimeDistributed(Dense(n_features))(decoded)
-ae_mf = Model(inputs, outputs)
-ae_mf.compile(optimizer='adam', loss='mse')
-
-history_mf = ae_mf.fit(
-    X_mf, X_mf,
-    epochs=20,
-    batch_size=32,
-    validation_split=0.1,
-    shuffle=True
-)
-
-# Делаем детекцию по MSE
-X_pred_mf = ae_mf.predict(X_mf)
-mse_mf = np.mean((X_pred_mf - X_mf)**2, axis=(1,2))
-threshold_mf = np.quantile(mse_mf, 0.98)  # настраиваемый квантиль
-
-dates_mf = daily_visits.index[n_steps-1:]
-daily_visits['anomaly_lstm_new'] = 0
-daily_visits.loc[dates_mf[mse_mf>threshold_mf], 'anomaly_lstm_new'] = 1
-
-# Визуализируем новый блок
-plt.figure(figsize=(15,5))
-plt.plot(daily_visits.index, daily_visits['visits'], alpha=0.4, label='Visits')
-plt.scatter(
-    daily_visits.index[daily_visits['anomaly_lstm_new']==1],
-    daily_visits['visits'][daily_visits['anomaly_lstm_new']==1],
-    c='purple', label='LSTM Anomaly (new)', s=50
-)
-plt.title("LSTM-AE (3 features): anomalies")
-plt.legend()
-plt.show()
-
-daily_visits.to_csv(
-    'anomalies_report.csv',   
-    index=False,               
-    encoding='utf-8-sig'     
-)
-
-# Сравнение старого и нового LSTM 
-old_count = daily_visits['anomaly_lstm_old'].sum()
-new_count = daily_visits['anomaly_lstm_new'].sum()
-print(f"Old LSTM flagged {old_count} anomalies")
-print(f"New LSTM flagged {new_count} anomalies")
-
-both    = ((daily_visits['anomaly_lstm_old']==1) & (daily_visits['anomaly_lstm_new']==1)).sum()
-union   = ((daily_visits['anomaly_lstm_old']==1) | (daily_visits['anomaly_lstm_new']==1)).sum()
-jaccard = both / union if union else 0
-print(f"Both flagged {both}, union {union}, Jaccard={jaccard:.2f}")
-
-# confusion matrix
-conf_mat = pd.crosstab(daily_visits['anomaly_lstm_old'], daily_visits['anomaly_lstm_new'],
-                       rownames=['Old'], colnames=['New'])
-print("\nConfusion matrix:\n", conf_mat)
-
-# тепловая карта
-plt.figure(figsize=(5,4))
-sns.heatmap(conf_mat, annot=True, fmt='d', cmap='Blues')
-plt.title('Old vs New LSTM Flags')
-plt.show()
-
-# timeline
-plt.figure(figsize=(12,3))
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid',
-         label='Old LSTM', alpha=0.7)
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid',
-         label='New LSTM', alpha=0.7)
-plt.ylim(-0.1,1.1)
-plt.title('Timeline of LSTM Anomaly Flags')
-plt.legend()
-plt.show()
-
-# даты расхождений
-diffs = daily_visits[daily_visits['anomaly_lstm_old'] != daily_visits['anomaly_lstm_new']]
-print(f"\nDates with differing flags ({len(diffs)}):")
-print(diffs[['anomaly_lstm_old','anomaly_lstm_new']])
-
-# Merge daily weather data with anomaly flags
-df_weather_vis = df_weather_vis.join(
-    daily_visits[['anomaly_if', 'anomaly_lstm_old', 'anomaly_lstm_new']]
-)
-
-# Temperature vs IF anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_if', y='temp', data=df_weather_vis)
-plt.title('Temperature: Normal vs IF-Anomalous Days')
-plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
-plt.ylabel('Temperature (°C)')
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
-
-# Temperature vs LSTM anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_lstm_new', y='temp', data=df_weather_vis)
-plt.title('Temperature: Normal vs LSTM-Anomalous Days')
-plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
-plt.ylabel('Temperature (°C)')
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
-
-# Rainfall vs IF anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_if', y='rain', data=df_weather_vis)
-plt.title('Rainfall: Normal vs IF-Anomalous Days')
-plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
-plt.ylabel('Rainfall (mm)')
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
-
-# Rainfall vs LSTM anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_lstm_new', y='rain', data=df_weather_vis)
-plt.title('Rainfall: Normal vs LSTM-Anomalous Days')
-plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
-plt.ylabel('Rainfall (mm)')
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
-
-# Mean weather values in normal vs anomalous days
-print("Average weather conditions on normal vs IF-anomalous days:")
-print(df_weather_vis.groupby('anomaly_if')[['temp', 'rain']].mean())
-
-print("\nAverage weather conditions on normal vs LSTM-anomalous days:")
-print(df_weather_vis.groupby('anomaly_lstm_new')[['temp', 'rain']].mean())
-
-
-# Объединяем visits с погодой
-df_for_if = daily_visits.join(df_wth, how='inner')
-df_for_if = df_for_if.dropna(subset=['visits', 'temp', 'rain'])
-
-# Модель Isolation Forest на 3 признаках
-features = ['visits', 'temp', 'rain']
-model_if_weather = IsolationForest(contamination=0.02, random_state=42)
-df_for_if['anomaly_if_weather'] = model_if_weather.fit_predict(df_for_if[features])
-
-# Обновляем основной датафрейм
-daily_visits['anomaly_if_weather'] = df_for_if['anomaly_if_weather']
-
-#LSTM with weather
-
-# Признаки: visits, high/low volume, temp, rain
-df_lstm = daily_visits.join(df_wth, how='inner').copy()
-df_lstm = df_lstm.dropna(subset=['visits', 'temp', 'rain'])
-
-df_lstm['high_volume'] = (df_lstm['visits'] > df_lstm['visits'].quantile(0.95)).astype(int)
-df_lstm['low_volume']  = (df_lstm['visits'] < df_lstm['visits'].quantile(0.05)).astype(int)
-
-features = ['visits', 'high_volume', 'low_volume', 'temp', 'rain']
-X_vals = df_lstm[features].values
-X_scaled = MinMaxScaler().fit_transform(X_vals)
-
-# sliding window
-n_steps = 14
-X_seq = np.array([X_scaled[i:i+n_steps] for i in range(len(X_scaled)-n_steps+1)])
-n_features = X_seq.shape[2]
-
-# Model
-inputs = Input(shape=(n_steps, n_features))
-encoded = LSTM(64, activation='relu')(inputs)
-decoded = RepeatVector(n_steps)(encoded)
-decoded = LSTM(64, activation='relu', return_sequences=True)(decoded)
-outputs = TimeDistributed(Dense(n_features))(decoded)
-
-ae_weather = Model(inputs, outputs)
-ae_weather.compile(optimizer='adam', loss='mse')
-
-ae_weather.fit(X_seq, X_seq, epochs=20, batch_size=32, validation_split=0.1, shuffle=True)
-
-# Predictions
-X_pred_weather = ae_weather.predict(X_seq)
-mse_weather = np.mean((X_pred_weather - X_seq)**2, axis=(1,2))
-threshold_weather = np.quantile(mse_weather, 0.98)
-
-# Аномалии
-dates_lstm = df_lstm.index[n_steps - 1:]
-df_lstm['anomaly_lstm_weather'] = 0
-df_lstm.loc[dates_lstm[mse_weather > threshold_weather], 'anomaly_lstm_weather'] = 1
-
-# Объединяем обратно
-daily_visits['anomaly_lstm_weather'] = df_lstm['anomaly_lstm_weather']
-
-
-def compare_flags(df, columns, label):
-    print(f"\n🔍 Comparison: {label}")
-    for a, b in combinations(columns, 2):
-        a_flags = df[a].replace({-1:1})  # IF uses -1 for anomaly
-        b_flags = df[b].replace({-1:1})
-        both = ((a_flags == 1) & (b_flags == 1)).sum()
-        union = ((a_flags == 1) | (b_flags == 1)).sum()
-        jaccard = both / union if union else 0
-        print(f"{a} vs {b}:")
-        print(f"  {a} anomalies: {a_flags.sum()}")
-        print(f"  {b} anomalies: {b_flags.sum()}")
-        print(f"  Both: {both}, Union: {union}, Jaccard: {jaccard:.2f}\n")
-
-# --- Сравнение IF версий ---
-compare_flags(
-    daily_visits,
-    ['anomaly_if', 'anomaly_if2', 'anomaly_if_weather'],
-    label='Isolation Forest Versions'
-)
-
-# --- Сравнение LSTM версий ---
-compare_flags(
-    daily_visits,
-    ['anomaly_lstm_old', 'anomaly_lstm_new', 'anomaly_lstm_weather'],
-    label='LSTM Versions'
-)
-
-#Пример для IF:
-plt.figure(figsize=(12,4))
-plt.plot(daily_visits.index, (daily_visits['anomaly_if']==-1).astype(int), drawstyle='steps-mid', label='IF (visits)', alpha=0.5)
-plt.plot(daily_visits.index, (daily_visits['anomaly_if2']==-1).astype(int), drawstyle='steps-mid', label='IF (visits + vol)', alpha=0.7)
-plt.plot(daily_visits.index, (daily_visits['anomaly_if_weather']==-1).astype(int), drawstyle='steps-mid', label='IF (with weather)', alpha=0.9)
-plt.ylim(-0.1,1.1)
-plt.title('Comparison of Isolation Forest Anomaly Flags')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-#LSTM
-plt.figure(figsize=(12,4))
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid', label='LSTM (visits)', alpha=0.5)
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid', label='LSTM (+vol)', alpha=0.7)
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_weather'], drawstyle='steps-mid', label='LSTM (with weather)', alpha=0.9)
-plt.ylim(-0.1,1.1)
-plt.title('Comparison of LSTM Anomaly Flags')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-
-# Приводим флаги к 0/1
-daily_visits['IF_visits'] = (daily_visits['anomaly_if'] == -1).astype(int)
-daily_visits['IF_vol'] = (daily_visits['anomaly_if2'] == -1).astype(int)
-daily_visits['IF_weather'] = (daily_visits['anomaly_if_weather'] == -1).astype(int)
-
-daily_visits['LSTM_visits'] = daily_visits['anomaly_lstm_old']
-daily_visits['LSTM_vol'] = daily_visits['anomaly_lstm_new']
-daily_visits['LSTM_weather'] = daily_visits['anomaly_lstm_weather']
-
+# %% ANOMALY DETECTIOOOOOON START!!!!
+
+# Создаёт и обучает модель LSTM Autoencoder, которая учится 
+# восстанавливать входные последовательности. Ошибки восстановления (MSE) 
+# позже используются для поиска аномалий.
+def fit_lstm_autoencoder(X, n_steps, n_features, epochs=20):
+    inputs = Input(shape=(n_steps, n_features))
+    encoded = LSTM(64, activation='relu')(inputs)
+    decoded = RepeatVector(n_steps)(encoded)
+    decoded = LSTM(64, activation='relu', return_sequences=True)(decoded)
+    outputs = TimeDistributed(Dense(n_features))(decoded)
+    model = Model(inputs, outputs)
+    model.compile(optimizer='adam', loss='mse')
+    model.fit(X, X, epochs=epochs, batch_size=32, validation_split=0.1, shuffle=True, verbose=0)
+    return model
+
+
+# Вычисляет MSE между предсказанием модели и реальными данными, 
+# и помечает точки с высокой ошибкой как аномалии (выше заданного квантиля).
+ 
+def get_lstm_anomalies(X, model, threshold_std=3):
+    preds = model.predict(X)
+    mse = np.mean((preds - X)**2, axis=(1, 2))
+
+    # Вычисляем порог как среднее + несколько стандартных отклонений
+    threshold = np.mean(mse) + threshold_std * np.std(mse)
+    return mse, (mse > threshold).astype(int)
+
+
+# Строит график посещений с выделенными аномальными точками определённого типа.
+def plot_anomalies(df, flag_col, color, label, title):
+    plt.figure(figsize=(15, 5))
+    plt.plot(df.index, df['visits'], alpha=0.5, label='Visits')
+    plt.scatter(df.index[df[flag_col] == 1], df['visits'][df[flag_col] == 1],
+                color=color, s=50, label=label)
+    plt.title(title)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.show()
+
+
+# Сравнивает погодные условия (температура, дождь) в нормальные и аномальные дни. 
+# Используется t-тест для оценки значимости различий.
+def compare_weather_stats(df, col_flag, feature):
+    normal = df[df[col_flag] == 0][feature]
+    anomaly = df[df[col_flag] == 1][feature]
+    t_stat, p_val = ttest_ind(normal, anomaly, equal_var=False)
+    print(f"{feature}: normal={normal.mean():.2f}, anomaly={anomaly.mean():.2f}, p={p_val:.4f}")
+
+
+# Сравнивает попарно различные модели по количеству совпадений аномалий, расхождений, 
+# Jaccard-индексу и проценту перекрытия.
 def compare_three_versions(df, version_list, model_name):
     rows = []
     for a, b in combinations(version_list, 2):
@@ -734,164 +385,299 @@ def compare_three_versions(df, version_list, model_name):
         })
     return pd.DataFrame(rows)
 
-# Сравнение IF
-if_versions = ['IF_visits', 'IF_vol', 'IF_weather']
-df_if_compare = compare_three_versions(daily_visits, if_versions, model_name='Isolation Forest')
 
-# Сравнение LSTM
-lstm_versions = ['LSTM_visits', 'LSTM_vol', 'LSTM_weather']
-df_lstm_compare = compare_three_versions(daily_visits, lstm_versions, model_name='LSTM')
+def print_metrics(y_true, y_pred):
+    print("Precision:", precision_score(y_true, y_pred))
+    print("Recall:", recall_score(y_true, y_pred))
+    print("F1:", f1_score(y_true, y_pred))
 
-# Вывод
+
+# Загрузка и предобработка данных предполагается заранее
+
+# Признаки объема
+high_thr = daily_visits['visits'].quantile(0.95)
+low_thr = daily_visits['visits'].quantile(0.05)
+daily_visits['high_volume'] = (daily_visits['visits'] > high_thr).astype(int)
+daily_visits['low_volume'] = (daily_visits['visits'] < low_thr).astype(int)
+
+# --- Isolation Forest ---
+model_if = IsolationForest(random_state=42)
+daily_visits['anomaly_if'] = model_if.fit_predict(daily_visits[['visits']])
+
+model_if2 = IsolationForest(random_state=42)
+daily_visits['anomaly_if2'] = model_if2.fit_predict(
+    daily_visits[['visits', 'high_volume', 'low_volume']]
+)
+
+model_if_weather = IsolationForest(random_state=42)
+df_for_if = daily_visits.join(df_wth).dropna()
+df_for_if['anomaly_if_weather'] = model_if_weather.fit_predict(
+    df_for_if[['visits', 'temp', 'rain']]
+)
+daily_visits['anomaly_if_weather'] = df_for_if['anomaly_if_weather']
+
+# --- LSTM AE (1 фича) ---
+n_steps = 14
+values = daily_visits['visits'].values.reshape(-1, 1)
+values_scaled = MinMaxScaler().fit_transform(values)
+X = np.array([values_scaled[i:i+n_steps] for i in range(len(values_scaled)-n_steps+1)])
+lstm_model = fit_lstm_autoencoder(X, n_steps, 1)
+mse, flags = get_lstm_anomalies(X, lstm_model)
+daily_visits['anomaly_lstm_old'] = 0
+daily_visits.iloc[n_steps-1:, daily_visits.columns.get_loc('anomaly_lstm_old')] = flags
+
+# --- LSTM AE (+volume) ---
+fv = daily_visits[['visits', 'high_volume', 'low_volume']].values
+fv_scaled = MinMaxScaler().fit_transform(fv)
+X_mf = np.array([fv_scaled[i:i+n_steps] for i in range(len(fv_scaled)-n_steps+1)])
+lstm_model2 = fit_lstm_autoencoder(X_mf, n_steps, 3)
+mse2, flags2 = get_lstm_anomalies(X_mf, lstm_model2)
+daily_visits['anomaly_lstm_new'] = 0
+daily_visits.iloc[n_steps-1:, daily_visits.columns.get_loc('anomaly_lstm_new')] = flags2
+
+# --- LSTM AE (+weather) ---
+lstm_df = daily_visits.join(df_wth).dropna().copy()
+lstm_df['high_volume'] = (lstm_df['visits'] > high_thr).astype(int)
+lstm_df['low_volume'] = (lstm_df['visits'] < low_thr).astype(int)
+features = ['visits', 'high_volume', 'low_volume', 'temp', 'rain']
+X_vals = lstm_df[features].values
+X_scaled = MinMaxScaler().fit_transform(X_vals)
+X_seq = np.array([X_scaled[i:i+n_steps] for i in range(len(X_scaled)-n_steps+1)])
+lstm_model3 = fit_lstm_autoencoder(X_seq, n_steps, X_seq.shape[2])
+mse3, flags3 = get_lstm_anomalies(X_seq, lstm_model3)
+lstm_df['anomaly_lstm_weather'] = 0
+lstm_df.iloc[n_steps-1:, lstm_df.columns.get_loc('anomaly_lstm_weather')] = flags3
+daily_visits['anomaly_lstm_weather'] = lstm_df['anomaly_lstm_weather']
+
+# --- Экспорт и сравнение ---
+daily_visits['IF_visits'] = (daily_visits['anomaly_if'] == -1).astype(int)
+daily_visits['IF_vol'] = (daily_visits['anomaly_if2'] == -1).astype(int)
+daily_visits['IF_weather'] = (daily_visits['anomaly_if_weather'] == -1).astype(int)
+daily_visits['LSTM_visits'] = daily_visits['anomaly_lstm_old']
+daily_visits['LSTM_vol'] = daily_visits['anomaly_lstm_new']
+daily_visits['LSTM_weather'] = daily_visits['anomaly_lstm_weather']
+
+anomaly_flags = ['IF_visits','IF_vol','IF_weather','LSTM_visits','LSTM_vol','LSTM_weather']
+anomalies = daily_visits[daily_visits[anomaly_flags].sum(axis=1) > 0].copy()
+anomalies = anomalies.reset_index().rename(columns={'index': 'date'})
+anomalies.to_csv("anomalies_with_context.csv", index=False)
+print("Saved: anomalies_with_context.csv")
+
+# Сравнение версий моделей
 print("\n=== Isolation Forest (3 versions) ===")
+df_if_compare = compare_three_versions(daily_visits, ['IF_visits', 'IF_vol', 'IF_weather'], 'Isolation Forest')
 print(df_if_compare)
 
 print("\n=== LSTM Autoencoder (3 versions) ===")
+df_lstm_compare = compare_three_versions(daily_visits, ['LSTM_visits', 'LSTM_vol', 'LSTM_weather'], 'LSTM')
 print(df_lstm_compare)
 
-#add AI
 
-API_KEY = os.getenv("REMOVED_OPENAI_KEY")
-MODEL_NAME = "gpt-4"           # или "gpt-4o", "gpt-3.5-turbo-16k" 
-OUTPUT_FILE = "verona_contextual_events.csv"
+# %% Визуализация различий 
 
-client = OpenAI(api_key=API_KEY)
+# Isolation Forest: original vs with high/low volume
+plt.figure(figsize=(15,6))
+plt.plot(daily_visits.index, daily_visits['visits'], color='gray', alpha=0.5, label='Visits')
+plt.scatter(daily_visits.index[daily_visits['anomaly_if'] == -1], daily_visits['visits'][daily_visits['anomaly_if'] == -1], color='red', marker='x', s=50, label='IF (original)')
+plt.scatter(daily_visits.index[daily_visits['anomaly_if2'] == -1], daily_visits['visits'][daily_visits['anomaly_if2'] == -1], color='blue', marker='o', s=50, label='IF (with high/low)')
+plt.title("Isolation Forest: original vs with high_volume/low_volume")
+plt.xlabel("Date")
+plt.ylabel("Number of Visits")
+plt.legend()
+plt.grid(alpha=0.3)
+plt.show()
 
-anomaly_dates = anomalies.index.strftime('%Y-%m-%d').tolist()
+# LSTM-AE (original)
+plt.figure(figsize=(15,5))
+plt.plot(daily_visits.index, daily_visits['visits'], label='Visits', alpha=0.5)
+plt.scatter(daily_visits.index[daily_visits['anomaly_lstm_old']==1], daily_visits['visits'][daily_visits['anomaly_lstm_old']==1], c='green', label='LSTM Anomaly (old)', s=50)
+plt.title("LSTM-AE (original): anomalies")
+plt.legend()
+plt.show()
 
-if os.path.exists(OUTPUT_FILE):
-    print(f"\n Events file found: {OUTPUT_FILE}")
-    events_df = pd.read_csv(OUTPUT_FILE)
-    existing_dates = events_df['date'].tolist()
-else:
-    print(f"\n No events file found. Creating new...")
-    events_df = pd.DataFrame(columns=['date', 'event_summary'])
-    existing_dates = []
+# LSTM-AE (3 features)
+plt.figure(figsize=(15,5))
+plt.plot(daily_visits.index, daily_visits['visits'], alpha=0.4, label='Visits')
+plt.scatter(daily_visits.index[daily_visits['anomaly_lstm_new']==1], daily_visits['visits'][daily_visits['anomaly_lstm_new']==1], c='purple', label='LSTM Anomaly (new)', s=50)
+plt.title("LSTM-AE (3 features): anomalies")
+plt.legend()
+plt.show()
 
-new_dates = [date for date in anomaly_dates if date not in existing_dates]
-print(f"\n Found {len(new_dates)} new anomaly dates")
+# Timeline of old vs new LSTM flags
+plt.figure(figsize=(12,3))
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid', label='Old LSTM', alpha=0.7)
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid', label='New LSTM', alpha=0.7)
+plt.ylim(-0.1,1.1)
+plt.title('Timeline of LSTM Anomaly Flags')
+plt.legend()
+plt.show()
 
-events_list = []
+# Temperature vs IF anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_if', y='temp', data=df_for_if)
+plt.title('Temperature: Normal vs IF-Anomalous Days')
+plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
+plt.ylabel('Temperature (°C)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
 
-def get_event_summary(date):
-    prompt = (f"What important events, festivals, incidents, or special conditions occurred "
-              f"in Verona, Italy around the date {date}? Provide a short, clear summary.")
-    chat_completion = client.chat.completions.create(
-        model=MODEL_NAME,
+# Temperature vs LSTM anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_lstm_new', y='temp', data=df_weather_vis)
+plt.title('Temperature: Normal vs LSTM-Anomalous Days')
+plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
+plt.ylabel('Temperature (°C)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Rainfall vs IF anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_if', y='rain', data=df_for_if)
+plt.title('Rainfall: Normal vs IF-Anomalous Days')
+plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
+plt.ylabel('Rainfall (mm)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Rainfall vs LSTM anomalies
+plt.figure(figsize=(8, 4))
+sns.boxplot(x='anomaly_lstm_new', y='rain', data=df_weather_vis)
+plt.title('Rainfall: Normal vs LSTM-Anomalous Days')
+plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
+plt.ylabel('Rainfall (mm)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# Comparison: IF flags timeline
+plt.figure(figsize=(15,3))
+plt.plot(daily_visits.index, (daily_visits['anomaly_if']==-1).astype(int), drawstyle='steps-mid', label='IF (visits)', alpha=0.5)
+plt.plot(daily_visits.index, (daily_visits['anomaly_if2']==-1).astype(int), drawstyle='steps-mid', label='IF (+vol)', alpha=0.7)
+plt.plot(daily_visits.index, (daily_visits['anomaly_if_weather']==-1).astype(int), drawstyle='steps-mid', label='IF (weather)', alpha=0.9)
+plt.ylim(-0.1,1.1)
+plt.title('Comparison of Isolation Forest Anomaly Flags')
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Comparison: LSTM flags timeline
+plt.figure(figsize=(15,3))
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid', label='LSTM (visits)', alpha=0.5)
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid', label='LSTM (+vol)', alpha=0.7)
+plt.plot(daily_visits.index, daily_visits['anomaly_lstm_weather'], drawstyle='steps-mid', label='LSTM (weather)', alpha=0.9)
+plt.ylim(-0.1,1.1)
+plt.title('Comparison of LSTM Anomaly Flags')
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+# Heatmap: Сравнение моделей по Jaccard Similarity
+models = ['IF_visits', 'IF_vol', 'IF_weather', 'LSTM_visits', 'LSTM_vol', 'LSTM_weather']
+flags = daily_visits[models].copy()
+jaccard_matrix = pd.DataFrame(index=models, columns=models)
+
+for a in models:
+    for b in models:
+        score = jaccard_score(flags[a], flags[b]) if a != b else 1.0
+        jaccard_matrix.loc[a, b] = round(score, 2)
+
+plt.figure(figsize=(8,6))
+sns.heatmap(jaccard_matrix.astype(float), annot=True, cmap='YlGnBu')
+plt.title("Jaccard Similarity between Models")
+plt.show()
+
+
+# Group anomalies by month and weekday
+calendar_df = daily_visits.copy()
+calendar_df['month'] = calendar_df.index.month
+calendar_df['weekday'] = calendar_df.index.weekday
+monthly_counts = calendar_df.groupby('month')[models].sum()
+weekday_counts = calendar_df.groupby('weekday')[models].sum()
+# Month 
+plt.figure(figsize=(10,4))
+sns.heatmap(monthly_counts.T, cmap='viridis', annot=True)
+plt.title("Monthly Anomaly Counts per Model")
+plt.xlabel("Month")
+plt.ylabel("Model")
+plt.show()
+# Weekday heatmap
+plt.figure(figsize=(10,4))
+sns.heatmap(weekday_counts.T, cmap='plasma', annot=True)
+plt.title("Weekday Anomaly Counts per Model (0=Mon)")
+plt.xlabel("Weekday")
+plt.ylabel("Model")
+plt.show()
+
+#table with all 
+anomaly_cols = ['IF_visits', 'IF_vol', 'IF_weather', 'LSTM_visits', 'LSTM_vol', 'LSTM_weather']
+for anomaly in anomaly_cols:
+    count = daily_visits[anomaly].sum()
+    print(f"{anomaly}: {count} аномалий")
+
+
+## После детекции аномалий (IF/LSTM) мы не всегда знаем причину — это может быть COVID, фестиваль, климат и т.д.
+# Чтобы интерпретировать найденные аномалии, мы подключаем LLM — GPT-4 и Mixtral.
+# Они получают одинаковые промпты и объясняют: ПОЧЕМУ день или период мог быть аномальным.
+# %% AI Initialization
+import os
+import time
+from dotenv import load_dotenv
+from openai import OpenAI
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+
+# 1) Загрузить ключ из файла aikey.env
+load_dotenv(dotenv_path="aikey.env")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise RuntimeError("Не найден OPENAI_API_KEY в файле aikey.env")
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+def ask_openai(prompt: str, model: str = "gpt-4") -> str:
+    resp = client.chat.completions.create(
+        model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
         max_tokens=300
     )
-    return chat_completion.choices[0].message.content.strip()
-
-for date in new_dates:
-    print(f"Processing date: {date}")
-    try:
-        summary = get_event_summary(date)
-        print(f"Event: {summary}\n")
-        events_list.append({'date': date, 'event_summary': summary})
-        time.sleep(1.5)
-    except Exception as e:
-        print(f"Error on {date}: {e}")
-
-if events_list:
-    new_events_df = pd.DataFrame(events_list)
-    events_df = pd.concat([events_df, new_events_df], ignore_index=True)
-    events_df.to_csv(OUTPUT_FILE, index=False)
-    print(f"\n Events file updated: '{OUTPUT_FILE}'")
-else:
-    print("\n No new events")
-
-print(events_df.head())
-
-# Добавим колонку "context_event" в DataFrame с аномалиями.
-#Если событие есть в verona_contextual_events.csv, оно подтянется.
-#Если нет → будет "No event found".
-events_df = pd.read_csv('verona_contextual_events.csv')
-anomalies_with_context = anomalies.copy()
-anomalies_with_context['date'] = anomalies_with_context.index.strftime('%Y-%m-%d')
-anomalies_with_context = anomalies_with_context.merge(events_df, how='left', on='date')
-
-print(anomalies_with_context[['visits', 'event_summary']].head())
-
-#Анализ и интерпретация результатов. Посчитать процент аномалий, совпавших с событиями
-total_anomalies = len(anomalies_with_context)
-matched_events = anomalies_with_context['event_summary'].notnull().sum()
-print(f"Events found for {matched_events} out of {total_anomalies} anomalies ({matched_events/total_anomalies:.2%})")
-plt.figure(figsize=(12,6))
-sns.countplot(y=anomalies_with_context['event_summary'].notnull(), palette='Set2')
-plt.title('Anomalies with/without Contextual Event')
-plt.xlabel('Count')
-plt.ylabel('Has Event')
-plt.grid(alpha=0.3)
-plt.show()
-
-
-
-# LSTM-периоды 
-# Группировка LSTM-аномалий в периоды
-df = daily_visits.copy()
-df['flag'] = df['anomaly_lstm']
-df['grp'] = (df['flag'] != df['flag'].shift()).cumsum()
-
-periods_lstm = (
-    df[df['flag']==1]
-      .groupby('grp')
-      .agg(
-          start_date=('flag','idxmin'),
-          end_date  =('flag','idxmax')
-      )
-      .reset_index(drop=True)
-)
-
-print("LSTM intervals:\n", periods_lstm)
-
-# Новая функция для AI-запросов
-def get_event_summary_lstm(start, end):
-    prompt = (
-        f"You are a factual assistant. Using only verified sources (e.g. Wikipedia), "
-        f"list major public events, festivals or incidents that actually took place in Verona, Italy "
-        f"between {start} and {end}. "
-        "If there are no records, answer “No known events in this period.”"
-    )
-
-    resp = client.chat.completions.create(
-        model=MODEL_NAME,
-        messages=[{"role":"user","content":prompt}],
-        temperature=0.0,
-        max_tokens=200
-    )
     return resp.choices[0].message.content.strip()
 
-# Сбор объяснений по каждому интервалу
-OUTPUT_LSTM = "verona_lstm_contextual_events.csv"
-if os.path.exists(OUTPUT_LSTM):
-    events_lstm_df = pd.read_csv(OUTPUT_LSTM)
-    existing_intervals = set(
-        zip(events_lstm_df['start_date'], events_lstm_df['end_date'])
-    )
-else:
-    events_lstm_df = pd.DataFrame(columns=['start_date','end_date','explanation'])
-    existing_intervals = set()
+# 3) Ленивый HF-пайплайн для бесплатной модели
+FREE_MODEL_NAME = "bigscience/bloom-560m"
+_hf_pipe = None
 
-new_rows = []
-for _, row in periods_lstm.iterrows():
-    sd = row['start_date'].date().isoformat()
-    ed = row['end_date'].date().isoformat()
-    if (sd, ed) in existing_intervals:
-        continue
-    print(f"Processing interval: {sd} → {ed}")
-    summary = get_event_summary_lstm(sd, ed)
-    new_rows.append({'start_date': sd, 'end_date': ed, 'explanation': summary})
-    time.sleep(1.5)
+def ask_free_model(prompt: str, max_tokens: int = 150) -> str:
+    global _hf_pipe
+    if _hf_pipe is None:
+        print("Loading HF model…")
+        tok = AutoTokenizer.from_pretrained(FREE_MODEL_NAME)
+        mdl = AutoModelForCausalLM.from_pretrained(FREE_MODEL_NAME, device_map="auto")
+        _hf_pipe = pipeline("text-generation", model=mdl, tokenizer=tok, device_map="auto")
+        print("HF model ready.")
+    out = _hf_pipe(prompt, max_new_tokens=max_tokens, do_sample=False)[0]["generated_text"]
+    return out.replace(prompt, "").strip()
 
-if new_rows:
-    events_lstm_df = pd.concat([events_lstm_df, pd.DataFrame(new_rows)], ignore_index=True)
-    events_lstm_df.to_csv(OUTPUT_LSTM, index=False)
-    print(f"\nLSTM events file updated: '{OUTPUT_LSTM}'")
-else:
-    print("\nNo new LSTM intervals to process")
+def clean_response(resp: str) -> str:
+    """
+    Normalize AI response: trim whitespace, catch various 'no events' patterns.
+    """
+    if not resp or not resp.strip():
+        return "No response"
+    low = resp.lower()
+    neg_patterns = [
+        "no events found", "no known events", "no response",
+        "nothing special", "нет событий", "нет особых"
+    ]
+    for pat in neg_patterns:
+        if pat in low:
+            return "No events found"
+    return resp.strip()
 
-print(events_lstm_df.head())
+print("✅ AI Initialization complete.")
 
 
+
+# %%
