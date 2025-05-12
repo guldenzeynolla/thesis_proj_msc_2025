@@ -16,7 +16,6 @@ import statsmodels.api as sm
 from statsmodels.nonparametric.smoothers_lowess import lowess
 from itertools import combinations
 from sklearn.metrics import jaccard_score
-import calendar
 from sklearn.metrics import precision_score, recall_score, f1_score
 from scipy.stats import ttest_ind
 
@@ -24,7 +23,9 @@ from dotenv import load_dotenv
 from openai import OpenAI
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
-
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.graphics.gofplots import qqplot
+from scipy import stats
 
 
 
@@ -110,7 +111,6 @@ print(f"Removed {before - len(combined_df_clean)} duplicate rows in combined_df\
 # Итоговая проверка пропусков
 print("Missing values in log_df:")
 print(log_df.isnull().sum()[lambda x: x > 0], "\n")
-
 print("Missing values in combined_df_clean:")
 print(combined_df_clean.isnull().sum()[lambda x: x > 0])
 
@@ -130,7 +130,6 @@ plt.legend()
 plt.grid(alpha=0.3)
 plt.show()
 
-
 # Среднее количество посещений каждого месяца за все годы
 combined_df_clean['month'] = combined_df_clean.index.month
 avg_monthly_visits = combined_df_clean.groupby('month').size() / combined_df_clean.index.year.nunique()
@@ -141,7 +140,6 @@ plt.xlabel('Month')
 plt.ylabel('Average Number of Visits')
 plt.grid(alpha=0.3)
 plt.show()
-
 
 #Топ-10 самых популярных точек интереса (POI)
 top_pois = combined_df_clean['sito_nome'].value_counts().head(10)
@@ -176,21 +174,6 @@ plt.grid(alpha=0.3)
 plt.show()
 
 # maybe we can play with cordinates(why we have them....) 
-plt.figure(figsize=(10, 8))
-sns.scatterplot(
-    data=combined_df_clean,
-    x='sito_longitudine',
-    y='sito_latitudine',
-    alpha=0.3,
-)
-plt.title('Geographic distribution of visits')
-plt.xlabel('Longitude')
-plt.ylabel('Latitude')
-plt.grid(alpha=0.3)
-plt.show()
-
-
-# i cant understand anithyyyyyyng so lets try plotly, берем unique
 df_unique = combined_df_clean[['sito_nome', 'sito_latitudine', 'sito_longitudine']].drop_duplicates()
 fig = px.scatter_mapbox(
     df_unique,
@@ -207,16 +190,16 @@ fig.update_traces(marker=dict(size=10))
 fig.update_layout(title="Interactive Map of Visits in Verona")
 fig.show()
 
-#lets add weather
-daily_visits = combined_df_clean.resample('D').size().to_frame('visits')
-df_wth = pd.read_csv('strisciate_vc/weather_db.csv', encoding='utf-8', parse_dates=['data'])
-df_wth = df_wth.set_index('data')[['temp','rain']]
+# %% lets add weather
 
-# объединение по дате (inner, чтобы отобрать совпадающие дни)
-df_weather_vis = daily_visits.join(df_wth, how='inner')
+daily_visits = combined_df_clean.resample('D').size().to_frame('visits')
+# Добавим погодные данные к daily_visits
+df_wth = pd.read_csv('strisciate_vc/weather_db.csv', encoding='utf-8', parse_dates=['data'])
+df_wth = df_wth.set_index('data')[['temp', 'rain']]
+daily_visits = daily_visits.join(df_wth, how='inner') # объединение по дате (inner, чтобы отобрать совпадающие дни)
 
 plt.figure(figsize=(8,4))
-plt.scatter(df_weather_vis['temp'], df_weather_vis['visits'], alpha=0.6)
+plt.scatter(daily_visits['temp'], daily_visits['visits'], alpha=0.6)
 plt.title('Daily Visits vs Temperature')
 plt.xlabel('Temperature (°C)')
 plt.ylabel('Visits per Day')
@@ -224,7 +207,7 @@ plt.grid(alpha=0.3)
 plt.show()
 
 plt.figure(figsize=(8,4))
-plt.scatter(df_weather_vis['rain'], df_weather_vis['visits'], alpha=0.6)
+plt.scatter(daily_visits['rain'], daily_visits['visits'], alpha=0.6)
 plt.title('Daily Visits vs Rainfall')
 plt.xlabel('Rainfall (mm)')
 plt.ylabel('Visits per Day')
@@ -232,20 +215,17 @@ plt.grid(alpha=0.3)
 plt.show()
 
 # Корреляции
-corr_t = df_weather_vis['visits'].corr(df_weather_vis['temp'])
-corr_r = df_weather_vis['visits'].corr(df_weather_vis['rain'])
+corr_t = daily_visits['visits'].corr(daily_visits['temp'])
+corr_r = daily_visits['visits'].corr(daily_visits['rain'])
 print(f"Correlation Visits–Temp: {corr_t:.2f}")
 print(f"Correlation Visits–Rain: {corr_r:.2f}")
 
-
 # LOESS-линию на temp vs visits
-df_clean = df_weather_vis[['temp', 'visits']].dropna().sort_values(by='temp')
+df_clean = daily_visits[['temp', 'visits']].dropna()
 x = df_clean['temp'].values
 y = df_clean['visits'].values
-
 lowess = sm.nonparametric.lowess
 smoothed = lowess(endog=y, exog=x, frac=0.2)
-
 plt.figure(figsize=(10, 5))
 plt.scatter(x, y, alpha=0.4, label='Data')
 plt.plot(smoothed[:, 0], smoothed[:, 1], color='red', label='LOESS curve')
@@ -257,11 +237,9 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-
 # LOESS для rain
-df_rain = df_weather_vis[['rain', 'visits']].dropna()
+df_rain = daily_visits[['rain', 'visits']].dropna()
 loess_rain = lowess(endog=df_rain['visits'], exog=df_rain['rain'], frac=0.2)
-
 plt.figure(figsize=(10, 5))
 plt.scatter(df_rain['rain'], df_rain['visits'], alpha=0.4, label='Data')
 plt.plot(loess_rain[:, 0], loess_rain[:, 1], color='red', label='LOESS curve')
@@ -273,13 +251,10 @@ plt.legend()
 plt.tight_layout()
 plt.show()
 
-
-
 # Barplot средних визитов по бинам температуры
-df_weather_vis['temp_bin'] = pd.cut(df_weather_vis['temp'], 
+daily_visits['temp_bin'] = pd.cut(daily_visits['temp'], 
                                     bins=range(0, 36, 5), right=False)
-temp_means = df_weather_vis.groupby('temp_bin')['visits'].mean().reset_index()
-
+temp_means = daily_visits.groupby('temp_bin')['visits'].mean().reset_index()
 plt.figure(figsize=(8,4))
 sns.barplot(x='temp_bin', y='visits', data=temp_means, palette='Blues')
 plt.xticks(rotation=45)
@@ -290,11 +265,10 @@ plt.grid(alpha=0.3, axis='y')
 plt.show()
 
 # Barplot средних визитов по бинам осадков
-df_weather_vis['rain_bin'] = pd.cut(df_weather_vis['rain'], 
-                                    bins=[0,1,5,15, df_weather_vis['rain'].max()],
+daily_visits['rain_bin'] = pd.cut(daily_visits['rain'], 
+                                    bins=[0,1,5,15, daily_visits['rain'].max()],
                                     labels=['0–1','1–5','5–15','15+'], right=False)
-rain_means = df_weather_vis.groupby('rain_bin')['visits'].mean().reset_index()
-
+rain_means = daily_visits.groupby('rain_bin')['visits'].mean().reset_index()
 plt.figure(figsize=(8,4))
 sns.barplot(x='rain_bin', y='visits', data=rain_means, palette='Blues_r')
 plt.title('Average Visits by Rainfall Bin')
@@ -306,327 +280,356 @@ plt.show()
 
 # %% ANOMALY DETECTIOOOOOON START!!!!
 
-# Создаёт и обучает модель LSTM Autoencoder, которая учится 
-# восстанавливать входные последовательности. Ошибки восстановления (MSE) 
-# позже используются для поиска аномалий.
-def fit_lstm_autoencoder(X, n_steps, n_features, epochs=20):
-    inputs = Input(shape=(n_steps, n_features))
-    encoded = LSTM(64, activation='relu')(inputs)
-    decoded = RepeatVector(n_steps)(encoded)
-    decoded = LSTM(64, activation='relu', return_sequences=True)(decoded)
-    outputs = TimeDistributed(Dense(n_features))(decoded)
-    model = Model(inputs, outputs)
+print(daily_visits.columns)
+print(daily_visits.head())
+
+
+# Константы
+N_STEPS       = 14
+LSTM_EPOCHS   = 20
+THRESHOLD_STD = 3
+RF_STATE      = 42
+
+def fit_lstm_autoencoder(X: np.ndarray, epochs: int = LSTM_EPOCHS) -> Model:
+    """
+    Строит и обучает LSTM Autoencoder на входных последовательностях X.
+    X.shape == (n_samples, N_STEPS, n_features)
+    """
+    n_steps, n_features = X.shape[1], X.shape[2]
+    inp = Input(shape=(n_steps, n_features))
+    enc = LSTM(64, activation='relu')(inp)
+    dec = RepeatVector(n_steps)(enc)
+    dec = LSTM(64, activation='relu', return_sequences=True)(dec)
+    out = TimeDistributed(Dense(n_features))(dec)
+    model = Model(inp, out)
     model.compile(optimizer='adam', loss='mse')
-    model.fit(X, X, epochs=epochs, batch_size=32, validation_split=0.1, shuffle=True, verbose=0)
+    model.fit(X, X, epochs=epochs, batch_size=32,
+              validation_split=0.1, shuffle=True, verbose=0)
     return model
 
-
-# Вычисляет MSE между предсказанием модели и реальными данными, 
-# и помечает точки с высокой ошибкой как аномалии (выше заданного квантиля).
- 
-def get_lstm_anomalies(X, model, threshold_std=3):
+def get_lstm_anomalies(X: np.ndarray, model: Model) -> np.ndarray:
+    """
+    Возвращает бинарный флаг аномалии для каждой последовательности в X.
+    Порог: mean(MSE) + THRESHOLD_STD * std(MSE).
+    """
     preds = model.predict(X)
-    mse = np.mean((preds - X)**2, axis=(1, 2))
+    mse   = np.mean((X - preds)**2, axis=(1,2))
+    thresh = mse.mean() + THRESHOLD_STD * mse.std()
+    flags  = (mse > thresh).astype(int)
+    # Вернуть массив длины original, с учётом сдвига N_STEPS-1
+    return np.concatenate([np.zeros(N_STEPS-1, dtype=int), flags])
 
-    # Вычисляем порог как среднее + несколько стандартных отклонений
-    threshold = np.mean(mse) + threshold_std * np.std(mse)
-    return mse, (mse > threshold).astype(int)
-
-
-# Строит график посещений с выделенными аномальными точками определённого типа.
-def plot_anomalies(df, flag_col, color, label, title):
-    plt.figure(figsize=(15, 5))
+def plot_anomalies(df, flag_col: str, title: str):
+    """
+    Рисует временной ряд визитов и отмечает аномальные точки.
+    """
+    plt.figure(figsize=(12,4))
     plt.plot(df.index, df['visits'], alpha=0.5, label='Visits')
-    plt.scatter(df.index[df[flag_col] == 1], df['visits'][df[flag_col] == 1],
-                color=color, s=50, label=label)
+    anoms = df[df[flag_col] == 1]
+    plt.scatter(anoms.index, anoms['visits'], color='red', s=40, label='Anomaly')
     plt.title(title)
-    plt.legend()
-    plt.grid(alpha=0.3)
-    plt.show()
+    plt.legend(); plt.grid(alpha=0.3); plt.show()
 
+def compare_weather_stats(df, flag_col: str, feature: str):
+    """
+    T-тест между нормальными и аномальными значениями feature.
+    """
+    norm = df[df[flag_col]==0][feature]
+    ano  = df[df[flag_col]==1][feature]
+    t, p = ttest_ind(norm, ano, equal_var=False)
+    print(f"{feature}: mean_norm={norm.mean():.1f}, mean_ano={ano.mean():.1f}, p={p:.4f}")
 
-# Сравнивает погодные условия (температура, дождь) в нормальные и аномальные дни. 
-# Используется t-тест для оценки значимости различий.
-def compare_weather_stats(df, col_flag, feature):
-    normal = df[df[col_flag] == 0][feature]
-    anomaly = df[df[col_flag] == 1][feature]
-    t_stat, p_val = ttest_ind(normal, anomaly, equal_var=False)
-    print(f"{feature}: normal={normal.mean():.2f}, anomaly={anomaly.mean():.2f}, p={p_val:.4f}")
+def compare_three_versions(df, cols: list, model_name: str):
+    """
+    Считает Jaccard, пересечения и различия между парами флагов.
+    """
+    from itertools import combinations
+    import pandas as pd
 
-
-# Сравнивает попарно различные модели по количеству совпадений аномалий, расхождений, 
-# Jaccard-индексу и проценту перекрытия.
-def compare_three_versions(df, version_list, model_name):
     rows = []
-    for a, b in combinations(version_list, 2):
-        A = df[a]
-        B = df[b]
-        both = ((A == 1) & (B == 1)).sum()
-        only_a = ((A == 1) & (B == 0)).sum()
-        only_b = ((A == 0) & (B == 1)).sum()
-        union = ((A == 1) | (B == 1)).sum()
-        jaccard = both / union if union else 0
-        overlap_a = both / A.sum() * 100 if A.sum() else 0
-        overlap_b = both / B.sum() * 100 if B.sum() else 0
-        disagreements = (A != B).sum()
+    for a, b in combinations(cols, 2):
+        A, B = df[a], df[b]
+        both = int(((A==1)&(B==1)).sum())
+        union= int(((A==1)|(B==1)).sum())
+        jacc = both/union if union else 0
         rows.append({
             'Model': model_name,
-            'Version A': a,
-            'Version B': b,
-            'Anomalies A': A.sum(),
-            'Anomalies B': B.sum(),
-            'Both Anomalies': both,
-            'Only in A': only_a,
-            'Only in B': only_b,
-            'Disagreements': disagreements,
-            'Jaccard Similarity': round(jaccard, 2),
-            'Overlap % A→B': round(overlap_a, 1),
-            'Overlap % B→A': round(overlap_b, 1),
+            'A': a, 'B': b,
+            'Both': both,
+            'Union': union,
+            'Jaccard': round(jacc,2),
+            'Disagreements': int((A!=B).sum())
         })
     return pd.DataFrame(rows)
 
+# --- Пример применения ---
+# Предполагается, что daily_visits уже содержит колонки ['visits','temp','rain','high_volume','low_volume']
 
-def print_metrics(y_true, y_pred):
-    print("Precision:", precision_score(y_true, y_pred))
-    print("Recall:", recall_score(y_true, y_pred))
-    print("F1:", f1_score(y_true, y_pred))
+# 1) Isolation Forest сразу в 0/1
+for name, feats in [
+    ('IF_visits',  ['visits']),
+    ('IF_vol',     ['visits','high_volume','low_volume']),
+    ('IF_weather', ['visits','temp','rain'])
+]:
+    model = IsolationForest(random_state=RF_STATE)
+    daily_visits[name] = (model.fit_predict(daily_visits[feats]) == -1).astype(int)
 
+# 2) LSTM Autoencoder
+# -- только visits
+vals = daily_visits['visits'].values.reshape(-1,1)
+scaled = MinMaxScaler().fit_transform(vals)
+X_seq  = np.array([scaled[i:i+N_STEPS] for i in range(len(scaled)-N_STEPS+1)])
+model  = fit_lstm_autoencoder(X_seq)
+daily_visits['LSTM_visits'] = get_lstm_anomalies(X_seq, model)
 
-# Загрузка и предобработка данных предполагается заранее
+# -- +volume
+fv     = daily_visits[['visits','high_volume','low_volume']].values
+scaled = MinMaxScaler().fit_transform(fv)
+X_seq2 = np.array([scaled[i:i+N_STEPS] for i in range(len(scaled)-N_STEPS+1)])
+model2 = fit_lstm_autoencoder(X_seq2)
+daily_visits['LSTM_vol'] = get_lstm_anomalies(X_seq2, model2)
 
-# Признаки объема
-high_thr = daily_visits['visits'].quantile(0.95)
-low_thr = daily_visits['visits'].quantile(0.05)
-daily_visits['high_volume'] = (daily_visits['visits'] > high_thr).astype(int)
-daily_visits['low_volume'] = (daily_visits['visits'] < low_thr).astype(int)
-
-# --- Isolation Forest ---
-model_if = IsolationForest(random_state=42)
-daily_visits['anomaly_if'] = model_if.fit_predict(daily_visits[['visits']])
-
-model_if2 = IsolationForest(random_state=42)
-daily_visits['anomaly_if2'] = model_if2.fit_predict(
-    daily_visits[['visits', 'high_volume', 'low_volume']]
-)
-
-model_if_weather = IsolationForest(random_state=42)
-df_for_if = daily_visits.join(df_wth).dropna()
-df_for_if['anomaly_if_weather'] = model_if_weather.fit_predict(
-    df_for_if[['visits', 'temp', 'rain']]
-)
-daily_visits['anomaly_if_weather'] = df_for_if['anomaly_if_weather']
-
-# --- LSTM AE (1 фича) ---
-n_steps = 14
-values = daily_visits['visits'].values.reshape(-1, 1)
-values_scaled = MinMaxScaler().fit_transform(values)
-X = np.array([values_scaled[i:i+n_steps] for i in range(len(values_scaled)-n_steps+1)])
-lstm_model = fit_lstm_autoencoder(X, n_steps, 1)
-mse, flags = get_lstm_anomalies(X, lstm_model)
-daily_visits['anomaly_lstm_old'] = 0
-daily_visits.iloc[n_steps-1:, daily_visits.columns.get_loc('anomaly_lstm_old')] = flags
-
-# --- LSTM AE (+volume) ---
-fv = daily_visits[['visits', 'high_volume', 'low_volume']].values
-fv_scaled = MinMaxScaler().fit_transform(fv)
-X_mf = np.array([fv_scaled[i:i+n_steps] for i in range(len(fv_scaled)-n_steps+1)])
-lstm_model2 = fit_lstm_autoencoder(X_mf, n_steps, 3)
-mse2, flags2 = get_lstm_anomalies(X_mf, lstm_model2)
-daily_visits['anomaly_lstm_new'] = 0
-daily_visits.iloc[n_steps-1:, daily_visits.columns.get_loc('anomaly_lstm_new')] = flags2
-
-# --- LSTM AE (+weather) ---
-lstm_df = daily_visits.join(df_wth).dropna().copy()
-lstm_df['high_volume'] = (lstm_df['visits'] > high_thr).astype(int)
-lstm_df['low_volume'] = (lstm_df['visits'] < low_thr).astype(int)
+# -- +weather
 features = ['visits', 'high_volume', 'low_volume', 'temp', 'rain']
-X_vals = lstm_df[features].values
-X_scaled = MinMaxScaler().fit_transform(X_vals)
-X_seq = np.array([X_scaled[i:i+n_steps] for i in range(len(X_scaled)-n_steps+1)])
-lstm_model3 = fit_lstm_autoencoder(X_seq, n_steps, X_seq.shape[2])
-mse3, flags3 = get_lstm_anomalies(X_seq, lstm_model3)
-lstm_df['anomaly_lstm_weather'] = 0
-lstm_df.iloc[n_steps-1:, lstm_df.columns.get_loc('anomaly_lstm_weather')] = flags3
-daily_visits['anomaly_lstm_weather'] = lstm_df['anomaly_lstm_weather']
+df_lstm = daily_visits.dropna(subset=features).copy()
+data_vals = df_lstm[features].values
+scaled   = MinMaxScaler().fit_transform(data_vals)
+seq      = np.array([scaled[i:i+N_STEPS] for i in range(len(scaled)-N_STEPS+1)])
+model3 = fit_lstm_autoencoder(seq, epochs=LSTM_EPOCHS)
+flags3 = get_lstm_anomalies(seq, model3)  # возвращает уже с паддингом N_STEPS-1
+df_lstm['LSTM_weather'] = flags3
+daily_visits['LSTM_weather'] = 0
+daily_visits.loc[df_lstm.index, 'LSTM_weather'] = df_lstm['LSTM_weather']
 
-# --- Экспорт и сравнение ---
-daily_visits['IF_visits'] = (daily_visits['anomaly_if'] == -1).astype(int)
-daily_visits['IF_vol'] = (daily_visits['anomaly_if2'] == -1).astype(int)
-daily_visits['IF_weather'] = (daily_visits['anomaly_if_weather'] == -1).astype(int)
-daily_visits['LSTM_visits'] = daily_visits['anomaly_lstm_old']
-daily_visits['LSTM_vol'] = daily_visits['anomaly_lstm_new']
-daily_visits['LSTM_weather'] = daily_visits['anomaly_lstm_weather']
 
-anomaly_flags = ['IF_visits','IF_vol','IF_weather','LSTM_visits','LSTM_vol','LSTM_weather']
-anomalies = daily_visits[daily_visits[anomaly_flags].sum(axis=1) > 0].copy()
-anomalies = anomalies.reset_index().rename(columns={'index': 'date'})
-anomalies.to_csv("anomalies_with_context.csv", index=False)
-print("Saved: anomalies_with_context.csv")
-
-# Сравнение версий моделей
-print("\n=== Isolation Forest (3 versions) ===")
-df_if_compare = compare_three_versions(daily_visits, ['IF_visits', 'IF_vol', 'IF_weather'], 'Isolation Forest')
-print(df_if_compare)
-
-print("\n=== LSTM Autoencoder (3 versions) ===")
-df_lstm_compare = compare_three_versions(daily_visits, ['LSTM_visits', 'LSTM_vol', 'LSTM_weather'], 'LSTM')
-print(df_lstm_compare)
+# 3) Визуализация и сравнение
+plot_anomalies(daily_visits, 'LSTM_weather', title='LSTM+Weather Anomalies')
+compare_weather_stats(daily_visits, 'IF_weather', 'temp')
+df_cmp = compare_three_versions(daily_visits,
+    ['IF_visits','IF_vol','IF_weather','LSTM_visits','LSTM_vol','LSTM_weather'],
+    model_name='AnomalyModels')
+print(df_cmp)
 
 
 # %% Визуализация различий 
+print(daily_visits.columns)
+print(daily_visits.head())
 
-# Isolation Forest: original vs with high/low volume
-plt.figure(figsize=(15,6))
-plt.plot(daily_visits.index, daily_visits['visits'], color='gray', alpha=0.5, label='Visits')
-plt.scatter(daily_visits.index[daily_visits['anomaly_if'] == -1], daily_visits['visits'][daily_visits['anomaly_if'] == -1], color='red', marker='x', s=50, label='IF (original)')
-plt.scatter(daily_visits.index[daily_visits['anomaly_if2'] == -1], daily_visits['visits'][daily_visits['anomaly_if2'] == -1], color='blue', marker='o', s=50, label='IF (with high/low)')
-plt.title("Isolation Forest: original vs with high_volume/low_volume")
-plt.xlabel("Date")
-plt.ylabel("Number of Visits")
-plt.legend()
+# Константы
+ANOMALY_COLS = [
+    'IF_visits','IF_vol','IF_weather',
+    'LSTM_visits','LSTM_vol','LSTM_weather'
+]
+
+def plot_time_series(df, window=7):
+    plt.figure(figsize=(15, 5))
+    df['visits'].plot(alpha=0.5, label='Visits')
+    df['visits'].rolling(window).mean().plot(
+        linewidth=2, label=f'{window}-day MA'
+    )
+    plt.title(f'Daily Visits with {window}-day Rolling Mean')
+    plt.xlabel('Date'); plt.ylabel('Visits')
+    plt.legend(); plt.grid(alpha=0.3); plt.tight_layout()
+    plt.show()
+
+def plot_anomaly_counts(df, cols):
+    counts = [df[c].sum() for c in cols]
+    plt.figure(figsize=(10,5))
+    sns.barplot(x=cols, y=counts, palette='Set2')
+    plt.title('Anomaly Count by Model')
+    plt.ylabel('Number of Anomalies')
+    plt.xticks(rotation=45); plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout(); plt.show()
+
+def plot_visit_distribution(df, flag_col):
+    plt.figure(figsize=(10,5))
+    sns.histplot(df[df[flag_col]==0]['visits'], label='Normal', kde=True)
+    sns.histplot(df[df[flag_col]==1]['visits'], label='Anomaly', kde=True)
+    plt.title(f'Visit Distribution: Normal vs {flag_col}')
+    plt.xlabel('Visits'); plt.ylabel('Frequency')
+    plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+def plot_boxplot_feature(df, flag_col, feature, labels=('Normal','Anomaly')):
+    tmp = df.dropna(subset=[feature, flag_col])
+    tmp[flag_col] = tmp[flag_col].map({0:labels[0],1:labels[1]})
+    plt.figure(figsize=(8,5))
+    sns.boxplot(x=flag_col, y=feature, data=tmp)
+    plt.title(f'{feature} on Normal vs Anomaly Days ({flag_col})')
+    plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+def plot_monthly_heatmap(df, flag_col):
+    # рассчитываем год и месяц на лету
+    idx = df.index
+    data = df.assign(
+        year=idx.year,
+        month=idx.month
+    ).groupby(['year','month'])[flag_col]\
+     .sum().unstack(fill_value=0)
+    plt.figure(figsize=(12,6))
+    sns.heatmap(data, cmap='Reds', annot=True, fmt='d')
+    plt.title(f'Monthly {flag_col} Anomalies (Heatmap)')
+    plt.xlabel('Month'); plt.ylabel('Year')
+    plt.tight_layout(); plt.show()
+
+def plot_calendar_heatmap(df, flag_col):
+    tmp = df.assign(
+        month=df.index.month,
+        weekday=df.index.weekday
+    ).pivot_table(
+        values=flag_col, index='month',
+        columns='weekday', aggfunc='sum', fill_value=0
+    )
+    plt.figure(figsize=(10,6))
+    sns.heatmap(tmp, cmap='Reds', annot=True, fmt='d')
+    plt.title(f'{flag_col} by Weekday and Month')
+    plt.xlabel('Weekday (0=Mon)')
+    plt.ylabel('Month')
+    plt.tight_layout(); plt.show()
+
+def plot_scatter(df, x, y, hue_flag):
+    plt.figure(figsize=(8,5))
+    sns.scatterplot(data=df, x=x, y=y, hue=df[hue_flag].astype(int), alpha=0.7)
+    plt.title(f'{y} vs {x} (colored by {hue_flag})')
+    plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+def plot_jaccard_heatmap(df, cols):
+    # строим матрицу Jaccard
+    mat = pd.DataFrame(index=cols, columns=cols, dtype=float)
+    for a in cols:
+        for b in cols:
+            if a==b:
+                mat.loc[a,b] = 1.0
+            else:
+                mat.loc[a,b] = jaccard_score(df[a], df[b])
+    plt.figure(figsize=(8,6))
+    sns.heatmap(mat, annot=True, cmap='YlGnBu', vmin=0, vmax=1)
+    plt.title('Jaccard Similarity between Models')
+    plt.tight_layout(); plt.show()
+
+# --- Вызовы функций ---
+
+plot_time_series(daily_visits, window=7)
+plot_anomaly_counts(daily_visits, ANOMALY_COLS)
+plot_visit_distribution(daily_visits, 'LSTM_visits')
+plot_boxplot_feature(daily_visits, 'LSTM_weather', 'temp')
+plot_monthly_heatmap(daily_visits, 'LSTM_weather')
+
+# пример для IF_weather vs rain
+plot_boxplot_feature(daily_visits, 'anomaly_if_weather', 'rain')
+
+# сравнение моделей
+plot_jaccard_heatmap(daily_visits, ANOMALY_COLS)
+plot_calendar_heatmap(daily_visits, 'LSTM_weather')
+plot_scatter(daily_visits, 'temp', 'visits', 'anomaly_if_weather')
+
+
+# Параметр period=365, т.к. данные – ежедневные за несколько лет
+decomp = seasonal_decompose(daily_visits['visits'], model='additive', period=365)
+fig = decomp.plot()
+fig.set_size_inches(12, 9)
+plt.suptitle('Seasonal Decomposition of Daily Visits', fontsize=16)
+plt.tight_layout(rect=[0, 0, 1, 0.96])
+plt.show()
+
+
+plt.figure(figsize=(12, 5))
+for col in ['IF_visits','IF_vol','IF_weather','LSTM_visits','LSTM_vol','LSTM_weather']:
+    rolling_rate = daily_visits[col].rolling(window=30).mean()
+    plt.plot(rolling_rate.index, rolling_rate, label=col)
+plt.title('30-Day Rolling Anomaly Rate by Model')
+plt.xlabel('Date')
+plt.ylabel('Proportion of Anomalies')
+plt.legend(loc='upper right', fontsize='small')
 plt.grid(alpha=0.3)
-plt.show()
-
-# LSTM-AE (original)
-plt.figure(figsize=(15,5))
-plt.plot(daily_visits.index, daily_visits['visits'], label='Visits', alpha=0.5)
-plt.scatter(daily_visits.index[daily_visits['anomaly_lstm_old']==1], daily_visits['visits'][daily_visits['anomaly_lstm_old']==1], c='green', label='LSTM Anomaly (old)', s=50)
-plt.title("LSTM-AE (original): anomalies")
-plt.legend()
-plt.show()
-
-# LSTM-AE (3 features)
-plt.figure(figsize=(15,5))
-plt.plot(daily_visits.index, daily_visits['visits'], alpha=0.4, label='Visits')
-plt.scatter(daily_visits.index[daily_visits['anomaly_lstm_new']==1], daily_visits['visits'][daily_visits['anomaly_lstm_new']==1], c='purple', label='LSTM Anomaly (new)', s=50)
-plt.title("LSTM-AE (3 features): anomalies")
-plt.legend()
-plt.show()
-
-# Timeline of old vs new LSTM flags
-plt.figure(figsize=(12,3))
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid', label='Old LSTM', alpha=0.7)
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid', label='New LSTM', alpha=0.7)
-plt.ylim(-0.1,1.1)
-plt.title('Timeline of LSTM Anomaly Flags')
-plt.legend()
-plt.show()
-
-# Temperature vs IF anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_if', y='temp', data=df_for_if)
-plt.title('Temperature: Normal vs IF-Anomalous Days')
-plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
-plt.ylabel('Temperature (°C)')
-plt.grid(alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# Temperature vs LSTM anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_lstm_new', y='temp', data=df_weather_vis)
-plt.title('Temperature: Normal vs LSTM-Anomalous Days')
-plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
-plt.ylabel('Temperature (°C)')
-plt.grid(alpha=0.3)
+
+features = ['visits', 'temp', 'rain', 'high_volume', 'low_volume']
+corr = daily_visits[features].corr()
+fig, ax = plt.subplots(figsize=(6, 5))
+cax = ax.matshow(corr, cmap='coolwarm')
+fig.colorbar(cax)
+ax.set_xticks(range(len(features)))
+ax.set_yticks(range(len(features)))
+ax.set_xticklabels(features, rotation=45, ha='left')
+ax.set_yticklabels(features)
+for (i, j), val in np.ndenumerate(corr.values):
+    ax.text(j, i, f"{val:.2f}", ha='center', va='center',
+            color='white' if abs(val) > 0.5 else 'black')
+
+plt.title('Feature Correlation Matrix', pad=20)
 plt.tight_layout()
 plt.show()
 
-# Rainfall vs IF anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_if', y='rain', data=df_for_if)
-plt.title('Rainfall: Normal vs IF-Anomalous Days')
-plt.xlabel('Anomaly by IF (-1 = normal, 1 = anomaly)')
-plt.ylabel('Rainfall (mm)')
-plt.grid(alpha=0.3)
+
+# 1. Violin-plot сезонного компонента по месяцам
+decomp = seasonal_decompose(daily_visits['visits'], model='additive', period=365)
+seasonal = decomp.seasonal.to_frame(name='seasonal')
+seasonal['month'] = seasonal.index.month
+
+plt.figure(figsize=(12, 6))
+sns.violinplot(x='month', y='seasonal', data=seasonal, palette='muted')
+plt.title('Distribution of Seasonal Component by Month')
+plt.xlabel('Month')
+plt.ylabel('Seasonal Value')
 plt.tight_layout()
 plt.show()
 
-# Rainfall vs LSTM anomalies
-plt.figure(figsize=(8, 4))
-sns.boxplot(x='anomaly_lstm_new', y='rain', data=df_weather_vis)
-plt.title('Rainfall: Normal vs LSTM-Anomalous Days')
-plt.xlabel('Anomaly by LSTM (0 = normal, 1 = anomaly)')
-plt.ylabel('Rainfall (mm)')
-plt.grid(alpha=0.3)
-plt.tight_layout()
-plt.show()
+# 2. Heatmap аномалий IF_models по месяцу и дню недели
+for col in ['IF_visits','IF_weather']:
+    tmp = daily_visits.copy()
+    tmp['month']   = tmp.index.month
+    tmp['weekday'] = tmp.index.weekday
+    heat = tmp.pivot_table(values=col, index='month', columns='weekday', aggfunc='sum', fill_value=0)
+    plt.figure(figsize=(8,5))
+    sns.heatmap(heat, annot=True, fmt='d', cmap='Blues')
+    plt.title(f'Heatmap of {col} by Month & Weekday')
+    plt.xlabel('Weekday (0=Mon)'); plt.ylabel('Month')
+    plt.tight_layout()
+    plt.show()
 
-# Comparison: IF flags timeline
-plt.figure(figsize=(15,3))
-plt.plot(daily_visits.index, (daily_visits['anomaly_if']==-1).astype(int), drawstyle='steps-mid', label='IF (visits)', alpha=0.5)
-plt.plot(daily_visits.index, (daily_visits['anomaly_if2']==-1).astype(int), drawstyle='steps-mid', label='IF (+vol)', alpha=0.7)
-plt.plot(daily_visits.index, (daily_visits['anomaly_if_weather']==-1).astype(int), drawstyle='steps-mid', label='IF (weather)', alpha=0.9)
-plt.ylim(-0.1,1.1)
-plt.title('Comparison of Isolation Forest Anomaly Flags')
-plt.legend()
-plt.tight_layout()
-plt.show()
+# 3. Гистограмма и QQ-plot остатков decomposition
+resid = decomp.resid.dropna()
 
-# Comparison: LSTM flags timeline
-plt.figure(figsize=(15,3))
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_old'], drawstyle='steps-mid', label='LSTM (visits)', alpha=0.5)
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_new'], drawstyle='steps-mid', label='LSTM (+vol)', alpha=0.7)
-plt.plot(daily_visits.index, daily_visits['anomaly_lstm_weather'], drawstyle='steps-mid', label='LSTM (weather)', alpha=0.9)
-plt.ylim(-0.1,1.1)
-plt.title('Comparison of LSTM Anomaly Flags')
-plt.legend()
-plt.tight_layout()
-plt.show()
-
-# Heatmap: Сравнение моделей по Jaccard Similarity
-models = ['IF_visits', 'IF_vol', 'IF_weather', 'LSTM_visits', 'LSTM_vol', 'LSTM_weather']
-flags = daily_visits[models].copy()
-jaccard_matrix = pd.DataFrame(index=models, columns=models)
-
-for a in models:
-    for b in models:
-        score = jaccard_score(flags[a], flags[b]) if a != b else 1.0
-        jaccard_matrix.loc[a, b] = round(score, 2)
-
-plt.figure(figsize=(8,6))
-sns.heatmap(jaccard_matrix.astype(float), annot=True, cmap='YlGnBu')
-plt.title("Jaccard Similarity between Models")
-plt.show()
-
-
-# Group anomalies by month and weekday
-calendar_df = daily_visits.copy()
-calendar_df['month'] = calendar_df.index.month
-calendar_df['weekday'] = calendar_df.index.weekday
-monthly_counts = calendar_df.groupby('month')[models].sum()
-weekday_counts = calendar_df.groupby('weekday')[models].sum()
-# Month 
 plt.figure(figsize=(10,4))
-sns.heatmap(monthly_counts.T, cmap='viridis', annot=True)
-plt.title("Monthly Anomaly Counts per Model")
-plt.xlabel("Month")
-plt.ylabel("Model")
-plt.show()
-# Weekday heatmap
-plt.figure(figsize=(10,4))
-sns.heatmap(weekday_counts.T, cmap='plasma', annot=True)
-plt.title("Weekday Anomaly Counts per Model (0=Mon)")
-plt.xlabel("Weekday")
-plt.ylabel("Model")
+sns.histplot(resid, bins=30, kde=True, color='gray')
+plt.title('Histogram of Decomposition Residuals')
+plt.xlabel('Residual'); plt.ylabel('Frequency')
+plt.tight_layout()
 plt.show()
 
-#table with all 
-anomaly_cols = ['IF_visits', 'IF_vol', 'IF_weather', 'LSTM_visits', 'LSTM_vol', 'LSTM_weather']
-for anomaly in anomaly_cols:
-    count = daily_visits[anomaly].sum()
-    print(f"{anomaly}: {count} аномалий")
+plt.figure(figsize=(6,6))
+qqplot(resid, line='s', ax=plt.gca())
+plt.title('QQ-Plot of Decomposition Residuals')
+plt.tight_layout()
+plt.show()
+
+# 4. Кластеризация соседних аномалий IF_weather → «события» и scatter duration vs avg temp
+df_evt = daily_visits[['IF_weather','temp']].copy()
+df_evt['grp'] = (df_evt['IF_weather'] != df_evt['IF_weather'].shift()).cumsum()
+events = (
+    df_evt[df_evt['IF_weather']==1]
+    .groupby('grp')
+    .agg(duration=('IF_weather','size'),
+         avg_temp=('temp','mean'))
+    .reset_index(drop=True)
+)
+
+plt.figure(figsize=(8,5))
+plt.scatter(events['duration'], events['avg_temp'], s=50, alpha=0.7)
+plt.title('Anomaly Event Duration vs Avg Temperature (IF_weather)')
+plt.xlabel('Duration (days)')
+plt.ylabel('Average Temperature (°C)')
+plt.grid(alpha=0.3)
+plt.tight_layout()
+plt.show()
 
 
 ## После детекции аномалий (IF/LSTM) мы не всегда знаем причину — это может быть COVID, фестиваль, климат и т.д.
 # Чтобы интерпретировать найденные аномалии, мы подключаем LLM — GPT-4 и Mixtral.
 # Они получают одинаковые промпты и объясняют: ПОЧЕМУ день или период мог быть аномальным.
-# %% AI Initialization
-import os
-import time
-from dotenv import load_dotenv
-from openai import OpenAI
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+ # %% AI Initialization
 
 # 1) Загрузить ключ из файла aikey.env
 load_dotenv(dotenv_path="aikey.env")
