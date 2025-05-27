@@ -117,6 +117,10 @@ print(log_df.isnull().sum()[lambda x: x > 0], "\n")
 print("Missing values in combined_df_clean:")
 print(combined_df_clean.isnull().sum()[lambda x: x > 0])
 
+#%% details
+
+combined_df_clean.info()
+log_df.info()
 # %% EDA tiiiime
 
 # Агрегируем количество посещений по месяцам и график с усреднением (скользящее среднее за 3 месяца)
@@ -131,6 +135,7 @@ plt.xlabel('Year')
 plt.ylabel('Number of Visits')
 plt.legend()
 plt.grid(alpha=0.3)
+plt.savefig("figures/monthly_visits_3rollmeans.pdf", format='pdf')
 plt.show()
 
 # Среднее количество посещений каждого месяца за все годы
@@ -142,6 +147,7 @@ plt.title('Average Monthly Visits (2014–2020)')
 plt.xlabel('Month')
 plt.ylabel('Average Number of Visits')
 plt.grid(alpha=0.3)
+plt.savefig("figures/avg_month_visits.pdf", format='pdf')
 plt.show()
 
 #Топ-10 самых популярных точек интереса (POI)
@@ -152,6 +158,7 @@ plt.title('Top 10 Most Visited POIs')
 plt.xlabel('Number of Visits')
 plt.ylabel('POI')
 plt.grid(alpha=0.3, axis='x')
+plt.savefig("figures/top10_poi.pdf", format='pdf')
 plt.show()
 
 #по часам
@@ -162,6 +169,7 @@ plt.title('Visits by Hour of Day')
 plt.xlabel('Hour of Day')
 plt.ylabel('Number of Visits')
 plt.grid(alpha=0.3)
+plt.savefig("figures/visits_by_hours.pdf", format='pdf')
 plt.show()
 
 #по дням недель
@@ -174,6 +182,7 @@ plt.title('Visits by Day of Week')
 plt.xlabel('Day of the Week')
 plt.ylabel('Number of Visits')
 plt.grid(alpha=0.3)
+plt.savefig("figures/visit_by_weekday.pdf", format='pdf')
 plt.show()
 
 # maybe we can play with cordinates(why we have them....) 
@@ -191,6 +200,7 @@ fig = px.scatter_mapbox(
 )
 fig.update_traces(marker=dict(size=10))
 fig.update_layout(title="Interactive Map of Visits in Verona")
+plt.savefig("figures/map_dots.pdf", format='pdf')
 fig.show()
 
 # %% lets add weather
@@ -207,6 +217,7 @@ plt.title('Daily Visits vs Temperature')
 plt.xlabel('Temperature (°C)')
 plt.ylabel('Visits per Day')
 plt.grid(alpha=0.3)
+plt.savefig("figures/temp_day.pdf", format='pdf')
 plt.show()
 
 plt.figure(figsize=(8,4))
@@ -215,6 +226,7 @@ plt.title('Daily Visits vs Rainfall')
 plt.xlabel('Rainfall (mm)')
 plt.ylabel('Visits per Day')
 plt.grid(alpha=0.3)
+plt.savefig("figures/rain_day.pdf", format='pdf')
 plt.show()
 
 # Корреляции
@@ -238,6 +250,7 @@ plt.ylabel('Number of Visits')
 plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
+plt.savefig("figures/loess_temp.pdf", format='pdf')
 plt.show()
 
 # LOESS для rain
@@ -252,6 +265,7 @@ plt.ylabel('Number of Visits')
 plt.grid(alpha=0.3)
 plt.legend()
 plt.tight_layout()
+plt.savefig("figures/loess_rain.pdf", format='pdf')
 plt.show()
 
 # Barplot средних визитов по бинам температуры
@@ -265,6 +279,7 @@ plt.title('Average Visits by Temperature Bin')
 plt.xlabel('Temperature Bin (°C)')
 plt.ylabel('Average Visits per Day')
 plt.grid(alpha=0.3, axis='y')
+plt.savefig("figures/barplot_temp.pdf", format='pdf')
 plt.show()
 
 # Barplot средних визитов по бинам осадков
@@ -278,6 +293,7 @@ plt.title('Average Visits by Rainfall Bin')
 plt.xlabel('Rainfall Bin (mm)')
 plt.ylabel('Average Visits per Day')
 plt.grid(alpha=0.3, axis='y')
+plt.savefig("figures/barplot_rain.pdf", format='pdf')
 plt.show()
 
 
@@ -363,16 +379,28 @@ def mark_periods(series: pd.Series, col_name: str) -> pd.Series:
     return bin_col
 
 
-def plot_anomalies(df, flag_col: str, title: str):
+def plot_anomalies(df, flag_col: str, title: str, save_path: str = None):
     """
-    Рисует временной ряд визитов и отмечает аномальные точки.
+    Рисует график и сохраняет в PDF, если указан save_path.
     """
-    plt.figure(figsize=(12,4))
+    plt.figure(figsize=(12, 4))
     plt.plot(df.index, df['visits'], alpha=0.5, label='Visits')
     anoms = df[df[flag_col] == 1]
     plt.scatter(anoms.index, anoms['visits'], color='red', s=40, label='Anomaly')
     plt.title(title)
-    plt.legend(); plt.grid(alpha=0.3); plt.show()
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+
+    if save_path:
+        import os
+        os.makedirs("figures", exist_ok=True)  # если папка ещё не создана
+        plt.savefig(os.path.join("figures", save_path), format='pdf')
+        print(f"Saved to figures/{save_path}")
+
+    plt.show()
+
+
 
 def compare_weather_stats(df, flag_col: str, feature: str):
     """
@@ -460,64 +488,106 @@ jacc_df = compare_three_versions(
 )
 print(jacc_df)
 
+plot_anomalies(daily_visits, 'IF_visits', 'IF: Anomalies in Visits Only', 'if_visits_anomalies.pdf')
+plot_anomalies(daily_visits, 'IF_vol', 'IF: Anomalies with Visit Volume Context', 'if_volume_anomalies.pdf')
+plot_anomalies(daily_visits,'IF_weather', 'IF: Anomalies with Weather Context', 'if_weather_anomalies.pdf')
+plot_anomalies(daily_visits, 'LSTM_visits_bin', 'LSTM: Anomalous Periods (Visits)', 'lstm_visits_anomalies.pdf')
+plot_anomalies(daily_visits, 'LSTM_vol_bin', 'LSTM: Volume-based Anomalies', 'lstm_vol_anomalies.pdf')
+plot_anomalies(daily_visits, 'LSTM_weather_bin', 'LSTM: Anomalies with Weather Context', 'figures/lstm_weather_anomalies.pdf')
+
+anomaly_models = [
+    'IF_visits', 'IF_vol', 'IF_weather',
+    'LSTM_visits_bin', 'LSTM_vol_bin', 'LSTM_weather_bin'
+]
+# %% length
+
+anomaly_counts = daily_visits[anomaly_models].sum()
+print(anomaly_counts)
 
 # %% Визуализация различий 
 from upsetplot import from_memberships, UpSet
 
 
-# --- Настройка ---
-anomaly_models = [
-    'IF_visits','IF_vol','IF_weather',
-    'LSTM_visits_bin','LSTM_vol_bin','LSTM_weather_bin'
-]
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.graphics.gofplots import qqplot
+from sklearn.metrics import jaccard_score
+from upsetplot import from_memberships, UpSet
 
-# Если у вас есть колонки с raw‐скорингами:
-if_score_col = 'IF_score'           # e.g. output decision_function
-lstm_error_col = 'LSTM_recon_error' # e.g. MSE по окну
+# === Настройка ===
 
-# Названия признаков для IF (в порядке, как подавали в модель)
-if_features = ['visits','vol','weather','temp','rain']
 
-# === Функции визуализации ===
+if_score_col = 'IF_score'
+lstm_error_col = 'LSTM_recon_error'
+if_features = ['visits', 'vol', 'weather', 'temp', 'rain']
+
+# === Путь сохранения ===
+def save_plot(name):
+    os.makedirs("figures", exist_ok=True)
+    return os.path.join("figures", name + ".pdf")
+
+# === Обёртка сохранения ===
+def wrap_and_save_plot(plot_func, filename, *args, **kwargs):
+    plt.figure()
+    plot_func(*args, **kwargs)
+    plt.savefig(save_plot(filename), bbox_inches='tight')
+    plt.close()
+
+# === Обработчик seasonal decomposition ===
+def seasonal_with_save(df, column, name, period=365):
+    decomp = seasonal_decompose(df[column], model='additive', period=period)
+    fig = decomp.plot()
+    fig.set_size_inches(12, 9)
+    fig.savefig(save_plot(f"{name}_decomp"), bbox_inches='tight')
+    plt.close(fig)
+
+    resid = decomp.resid.dropna()
+    plt.figure(figsize=(10, 4))
+    sns.histplot(resid, stat='density', kde=True)
+    plt.title('Histogram of Residuals')
+    plt.tight_layout()
+    plt.savefig(save_plot(f"{name}_resid_hist"))
+    plt.close()
+
+    plt.figure(figsize=(6, 6))
+    qqplot(resid, line='s', ax=plt.gca())
+    plt.title('QQ-Plot of Residuals')
+    plt.tight_layout()
+    plt.savefig(save_plot(f"{name}_resid_qq"))
+    plt.close()
+
+# === Основные функции визуализации ===
 
 def plot_upset_from_anomalies(df, models):
     sets = []
-    for idx, row in df[models].iterrows():
+    for _, row in df[models].iterrows():
         active = [m for m in models if row[m] == 1]
         if active:
             sets.append(tuple(sorted(active)))
     data = from_memberships(sets)
-    plt.figure(figsize=(10,5))
     UpSet(data, subset_size='count', show_percentages=True).plot()
     plt.suptitle("Anomaly Overlaps Between Models", fontsize=16)
-    plt.show()
 
 def get_period_lengths(series):
     periods = extract_anomaly_periods(series)
-    return [ (end - start).days + 1 for start, end in periods ]
+    return [(end - start).days + 1 for start, end in periods]
 
 def plot_anomaly_period_lengths(df):
-    data = {
-        'LSTM_visits_bin': get_period_lengths(df['LSTM_visits']),
-        'LSTM_vol_bin': get_period_lengths(df['LSTM_vol']),
-        'LSTM_weather_bin': get_period_lengths(df['LSTM_weather']),
-        'IF_visits': get_period_lengths(df['IF_visits']),
-        'IF_vol': get_period_lengths(df['IF_vol']),
-        'IF_weather': get_period_lengths(df['IF_weather'])
-
-    }
-    df_lengths = pd.DataFrame(dict([(k,pd.Series(v)) for k,v in data.items()]))
+    data = {m: get_period_lengths(df[m]) for m in anomaly_models}
+    df_lengths = pd.DataFrame(dict([(k, pd.Series(v)) for k, v in data.items()]))
     df_lengths = df_lengths.melt(var_name='Model', value_name='Duration (days)')
-
-    plt.figure(figsize=(10,5))
     sns.boxplot(data=df_lengths, x='Model', y='Duration (days)', palette='Set3')
     plt.title("Distribution of Anomaly Period Lengths")
-    plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
 
 def plot_anomaly_timeline(df, models):
     import matplotlib.dates as mdates
     fig, ax = plt.subplots(figsize=(15, len(models) * 0.6))
-    for i, model in enumerate(models):
+    for model in models:
         periods = extract_anomaly_periods(df[model])
         for start, end in periods:
             ax.barh(model, (end - start).days + 1, left=start, height=0.4)
@@ -525,10 +595,9 @@ def plot_anomaly_timeline(df, models):
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
     plt.title("Anomaly Periods by Model")
     plt.grid(True, axis='x', alpha=0.3)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
 
 def plot_time_series_with_anomalies(df, models):
-    plt.figure(figsize=(15,5))
     plt.plot(df.index, df['visits'], alpha=0.6, label='Visits', color='black')
     colors = ['red', 'blue', 'green', 'orange']
     for i, model in enumerate(models):
@@ -536,129 +605,72 @@ def plot_time_series_with_anomalies(df, models):
         plt.fill_between(df.index, 0, df['visits'], where=mask, alpha=0.2, color=colors[i % len(colors)], label=model)
     plt.title('Daily Visits with Anomaly Periods')
     plt.xlabel('Date'); plt.ylabel('Visits')
-    plt.legend(ncol=2); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+    plt.legend(ncol=2); plt.grid(alpha=0.3); plt.tight_layout()
 
 def plot_anomaly_counts(df, models):
     counts = df[models].sum()
-    plt.figure(figsize=(10,5))
     sns.barplot(x=counts.index, y=counts.values, palette='Set2')
     plt.title('Anomaly Count by Model')
     plt.ylabel('Number of Anomalies')
     plt.xticks(rotation=45); plt.grid(axis='y', alpha=0.3)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
 
 def plot_visit_distribution(df, model):
-    plt.figure(figsize=(10,5))
     sns.histplot(df[df[model]==0]['visits'], stat='density', kde=True, label='Normal')
     sns.histplot(df[df[model]==1]['visits'], stat='density', kde=True, label='Anomaly')
     plt.title(f'Visits: Normal vs {model}')
     plt.xlabel('Visits'); plt.ylabel('Density')
-    plt.legend(); plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+    plt.legend(); plt.grid(alpha=0.3); plt.tight_layout()
 
 def plot_monthly_heatmap(df, model):
-    data = (df
-        .assign(year=df.index.year, month=df.index.month)
-        .groupby(['year','month'])[model]
-        .sum()
-        .unstack(fill_value=0)
-    )
-    plt.figure(figsize=(12,6))
+    data = (df.assign(year=df.index.year, month=df.index.month)
+              .groupby(['year','month'])[model]
+              .sum()
+              .unstack(fill_value=0))
     sns.heatmap(data, cmap='Reds', annot=True, fmt='d')
     plt.title(f'Monthly Anomaly Counts ({model})')
     plt.xlabel('Month'); plt.ylabel('Year')
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
 
 def plot_jaccard_heatmap(df, models):
     mat = pd.DataFrame(index=models, columns=models, dtype=float)
     for a in models:
         for b in models:
             mat.loc[a,b] = jaccard_score(df[a], df[b])
-    plt.figure(figsize=(8,6))
     sns.heatmap(mat, annot=True, cmap='YlGnBu', vmin=0, vmax=1)
     plt.title('Jaccard Similarity between Models')
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
 
 def plot_rolling_rate(df, models, window=30):
-    plt.figure(figsize=(15,5))
     for m in models:
         rate = df[m].rolling(window).mean()
         plt.plot(rate.index, rate, label=m)
     plt.title(f'{window}-Day Rolling Anomaly Rate')
     plt.xlabel('Date'); plt.ylabel('Proportion')
     plt.legend(ncol=2, fontsize='small'); plt.grid(alpha=0.3)
-    plt.tight_layout(); plt.show()
+    plt.tight_layout()
 
 def plot_feature_correlation(df, features):
     corr = df[features].corr()
-    plt.figure(figsize=(6,5))
     sns.heatmap(corr, annot=True, cmap='coolwarm', vmin=-1, vmax=1)
-    plt.title('Feature Correlation Matrix'); plt.tight_layout(); plt.show()
-
-def plot_seasonal_decomposition(df, column, period=365):
-    decomp = seasonal_decompose(df[column], model='additive', period=period)
-    fig = decomp.plot()
-    fig.set_size_inches(12,9)
-    plt.suptitle(f'Seasonal Decomposition ({column})', fontsize=16)
-    plt.tight_layout(rect=[0,0,1,0.95]); plt.show()
-    resid = decomp.resid.dropna()
-    # Гистограмма остатков
-    plt.figure(figsize=(10,4))
-    sns.histplot(resid, stat='density', kde=True)
-    plt.title('Histogram of Residuals'); plt.tight_layout(); plt.show()
-    # QQ-plot
-    plt.figure(figsize=(6,6))
-    qqplot(resid, line='s', ax=plt.gca())
-    plt.title('QQ-Plot of Residuals'); plt.tight_layout(); plt.show()
-
-def plot_score_distribution(df, score_col, threshold=None):
-    plt.figure(figsize=(10,5))
-    sns.histplot(df[score_col], stat='density', kde=True)
-    if threshold is not None:
-        plt.axvline(threshold, color='red', linestyle='--', label='Threshold')
-    plt.title(f'Distribution of {score_col}')
-    plt.legend(); plt.tight_layout(); plt.show()
-
-def plot_if_feature_importance(if_model, feature_names):
-    importances = if_model.feature_importances_
-    fi = pd.Series(importances, index=feature_names).sort_values(ascending=False)
-    plt.figure(figsize=(8,5))
-    sns.barplot(x=fi.values, y=fi.index, palette='Blues_d')
-    plt.title('Isolation Forest Feature Importances')
-    plt.tight_layout(); plt.show()
-
-def plot_roc_pr(df, score_col, true_col):
-    fpr, tpr, _ = roc_curve(df[true_col], df[score_col])
-    prec, rec, _ = precision_recall_curve(df[true_col], df[score_col])
-    plt.figure(figsize=(12,5))
-    # ROC
-    plt.subplot(1,2,1)
-    plt.plot(fpr, tpr, label=f'AUC={auc(fpr,tpr):.2f}')
-    plt.title('ROC Curve'); plt.xlabel('FPR'); plt.ylabel('TPR')
-    plt.legend(); plt.grid(alpha=0.3)
-    # PR
-    plt.subplot(1,2,2)
-    plt.plot(rec, prec, label=f'AP={auc(rec,prec):.2f}')
-    plt.title('Precision-Recall Curve'); plt.xlabel('Recall'); plt.ylabel('Precision')
-    plt.legend(); plt.grid(alpha=0.3)
-    plt.tight_layout(); plt.show()
+    plt.title('Feature Correlation Matrix')
+    plt.tight_layout()
 
 # === Вызовы ===
-
-plot_time_series_with_anomalies(daily_visits, anomaly_models)
-plot_anomaly_counts(daily_visits, anomaly_models)
+wrap_and_save_plot(plot_time_series_with_anomalies, "timeline_all_models", daily_visits, anomaly_models)
+wrap_and_save_plot(plot_anomaly_counts, "anomaly_counts", daily_visits, anomaly_models)
 
 for m in anomaly_models:
-    plot_visit_distribution(daily_visits, m)
-    plot_monthly_heatmap(daily_visits, m)
+    wrap_and_save_plot(plot_visit_distribution, f"dist_{m}", daily_visits, m)
+    wrap_and_save_plot(plot_monthly_heatmap, f"heatmap_{m}", daily_visits, m)
 
-plot_jaccard_heatmap(daily_visits, anomaly_models)
-plot_rolling_rate(daily_visits, anomaly_models)
-plot_feature_correlation(daily_visits, ['visits','temp','rain','high_volume','low_volume'])
-plot_seasonal_decomposition(daily_visits, 'visits')
-
-plot_upset_from_anomalies(daily_visits, anomaly_models)
-plot_anomaly_period_lengths(daily_visits)
-plot_anomaly_timeline(daily_visits, anomaly_models)
+wrap_and_save_plot(plot_jaccard_heatmap, "jaccard_heatmap", daily_visits, anomaly_models)
+wrap_and_save_plot(plot_rolling_rate, "rolling_anomaly_rate", daily_visits, anomaly_models)
+wrap_and_save_plot(plot_feature_correlation, "feature_corr", daily_visits, ['visits','temp','rain','high_volume','low_volume'])
+wrap_and_save_plot(plot_upset_from_anomalies, "upset_overlap", daily_visits, anomaly_models)
+wrap_and_save_plot(plot_anomaly_period_lengths, "anomaly_period_lengths", daily_visits)
+wrap_and_save_plot(plot_anomaly_timeline, "anomaly_timeline", daily_visits, anomaly_models)
+seasonal_with_save(daily_visits, 'visits', 'seasonality_visits')
 
 
 ## После детекции аномалий (IF/LSTM) мы не всегда знаем причину — это может быть COVID, фестиваль, климат и т.д.
@@ -667,51 +679,60 @@ plot_anomaly_timeline(daily_visits, anomaly_models)
 
 
  # %% AI Initialization
+import os
+import time
+import torch
+from dotenv import load_dotenv
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from openai import OpenAI
 
-load_dotenv(dotenv_path="aikey.env")
+# 🔧 Подавление конфликта OpenMP
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
+# === Загрузка ключа OpenAI ===
+load_dotenv("aikey.env")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("OPENAI_API_KEY не найден в файле aikey.env")
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+def ask_gpt(prompt):
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,
+            max_tokens=300
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        return f"[GPT error] {str(e)}"
 
-def ask_paid_ai(prompt: str, model: str = "gpt-4") -> str:
-    """Запрос к платному OpenAI API."""
-    resp = openai_client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.0,
-        max_tokens=300
-    )
-    return resp.choices[0].message.content.strip()
+# === Настройка OpenChat 3.5 ===
+FREE_MODEL_NAME = "TheBloke/Mistral-7B-Instruct-v0.2-GGUF"
+openchat_pipeline = None
 
-# Ленивый загрузчик HF-пайплайна для бесплатной модели
-FREE_MODEL_NAME = "bigscience/bloom-560m"
-_hf_pipeline = None
+def ask_openchat(prompt, max_tokens=150):
+    global openchat_pipeline
+    if openchat_pipeline is None:
+        print("⚡ Загрузка OpenChat 3.5...")
+        tokenizer = AutoTokenizer.from_pretrained(FREE_MODEL_NAME, use_fast=True)
+        model = AutoModelForCausalLM.from_pretrained(FREE_MODEL_NAME).to("cpu").eval()
+        openchat_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer)
+        print("✅ OpenChat готов.")
 
-def ask_free_ai(prompt: str, max_tokens: int = 80) -> str:
-    """Запрос к локальной бесплатной модели HF."""
-    global _hf_pipeline
-    if _hf_pipeline is None:
-        print("Загрузка HF-модели…")
-        tokenizer = AutoTokenizer.from_pretrained(FREE_MODEL_NAME)
-        model = AutoModelForCausalLM.from_pretrained(FREE_MODEL_NAME, device_map="auto")
-        _hf_pipeline = pipeline("text-generation", model=model, tokenizer=tokenizer, device_map="auto")
-        print("HF-модель готова.")
-    
-    output = _hf_pipeline(prompt, max_new_tokens=max_tokens, do_sample=False)[0]["generated_text"]
-    return output.replace(prompt, "").strip()
+    full_prompt = f"<|user|>\n{prompt.strip()}\n<|assistant|>\n"
+    with torch.no_grad():
+        output = openchat_pipeline(full_prompt, max_new_tokens=max_tokens, do_sample=False)[0]["generated_text"]
+    return output.replace(full_prompt, "").strip()
 
 def normalize_response(resp: str) -> str:
-    """
-    Нормализует ответы AI:
-    - Пустые или содержащие маркеры «нет данных» приводятся к 'no data'
-    """
+    """Нормализует ответы AI."""
     if not resp or not resp.strip():
         return "no data"
     lower = resp.lower()
-    negative_markers = ["no events found", "no known events", "nothing special",
-                        "нет данных", "нет событий", "no data"]
+    negative_markers = [
+        "no events found", "no known events", "nothing special",
+        "нет данных", "нет событий", "no data"
+    ]
     for marker in negative_markers:
         if marker in lower:
             return "no data"
@@ -720,8 +741,13 @@ def normalize_response(resp: str) -> str:
 print("✅ Клиенты AI инициализированы.")
 
 
+#%% check
+prompt = "On February 22, 2020, a spike or drop in tourism activity was detected in Verona. What might have caused it?"
 
-# %% начало получения причин
+response = ask_openchat(prompt)
+print("🆓 OpenChat ответ:\n", response)
+
+#%% work with ai
 
 from tqdm import tqdm
 
@@ -861,7 +887,7 @@ def run_dual_llm_queries_safe(prompts, autosave_every=10, output_file="llm_compl
             paid = "no data"
             paid_time = -1
 
-        # Запрос к BLOOM (бесплатный)
+        # Запрос к (бесплатный)
         try:
             free_start = time.time()
             free = normalize_response(ask_free_ai(p['prompt']))
